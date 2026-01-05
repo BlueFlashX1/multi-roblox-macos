@@ -8,6 +8,7 @@ import (
 	"insadem/multi_roblox_macos/internal/instance_manager"
 	"insadem/multi_roblox_macos/internal/open_app"
 	"insadem/multi_roblox_macos/internal/preset_manager"
+	"insadem/multi_roblox_macos/internal/resource_monitor"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -38,17 +39,19 @@ func main() {
 }
 
 func createInstancesTab(window fyne.Window) fyne.CanvasObject {
-	// Instance counter label
+	// Instance counter and system stats labels
 	counterLabel := widget.NewLabel("Running Instances: 0")
 	counterLabel.TextStyle = fyne.TextStyle{Bold: true}
 
-	// Instance list
+	systemStatsLabel := widget.NewLabel("System: CPU 0% | Memory 0 MB / 0 MB")
+
+	// Instance list with resource stats
 	instanceList := widget.NewList(
 		func() int { return 0 },
 		func() fyne.CanvasObject {
-			return container.NewHBox(
+			return container.NewVBox(
 				widget.NewLabel("Instance"),
-				widget.NewButton("Close", nil),
+				widget.NewLabel("Resources"),
 			)
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {},
@@ -67,6 +70,15 @@ func createInstancesTab(window fyne.Window) fyne.CanvasObject {
 		currentInstances = instances
 		counterLabel.SetText(fmt.Sprintf("Running Instances: %d", len(instances)))
 
+		// Update system stats
+		cpuPercent, memUsed, memTotal, err := resource_monitor.GetSystemStats()
+		if err == nil {
+			systemStatsLabel.SetText(fmt.Sprintf("System: CPU %.1f%% | Memory %s / %s",
+				cpuPercent,
+				resource_monitor.FormatMemory(memUsed),
+				resource_monitor.FormatMemory(memTotal)))
+		}
+
 		instanceList.Length = func() int {
 			return len(currentInstances)
 		}
@@ -78,15 +90,22 @@ func createInstancesTab(window fyne.Window) fyne.CanvasObject {
 
 			instance := currentInstances[id]
 			box := obj.(*fyne.Container)
-			label := box.Objects[0].(*widget.Label)
-			button := box.Objects[1].(*widget.Button)
+			instanceLabel := box.Objects[0].(*widget.Label)
+			resourceLabel := box.Objects[1].(*widget.Label)
 
-			label.SetText(fmt.Sprintf("Instance %d (PID: %d)", id+1, instance.PID))
-
-			button.OnTapped = func() {
-				instance_manager.CloseInstance(instance.PID)
-				updateInstances()
+			// Get resource stats for this instance
+			stats, err := resource_monitor.GetProcessStats(instance.PID)
+			resourceInfo := ""
+			if err == nil {
+				resourceInfo = fmt.Sprintf("CPU: %.1f%% | Memory: %s",
+					stats.CPUPercent,
+					resource_monitor.FormatMemory(stats.MemoryMB))
+			} else {
+				resourceInfo = "Stats unavailable"
 			}
+
+			instanceLabel.SetText(fmt.Sprintf("Instance %d (PID: %d)", id+1, instance.PID))
+			resourceLabel.SetText(resourceInfo)
 		}
 
 		instanceList.Refresh()
@@ -119,6 +138,7 @@ func createInstancesTab(window fyne.Window) fyne.CanvasObject {
 	return container.NewBorder(
 		container.NewVBox(
 			counterLabel,
+			systemStatsLabel,
 			widget.NewSeparator(),
 		),
 		container.NewVBox(
