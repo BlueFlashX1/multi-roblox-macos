@@ -7,11 +7,13 @@ import (
 	"insadem/multi_roblox_macos/internal/discord_redirect"
 	"insadem/multi_roblox_macos/internal/instance_manager"
 	"insadem/multi_roblox_macos/internal/open_app"
+	"insadem/multi_roblox_macos/internal/preset_manager"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -22,8 +24,20 @@ import (
 func main() {
 	mainApp := app.New()
 	window := mainApp.NewWindow("Multi Roblox Manager")
-	window.Resize(fyne.NewSize(400, 500))
+	window.Resize(fyne.NewSize(500, 600))
 
+	// Create tabs
+	tabs := container.NewAppTabs(
+		container.NewTabItem("Instances", createInstancesTab(window)),
+		container.NewTabItem("Presets", createPresetsTab(window)),
+		container.NewTabItem("About", createAboutTab(window)),
+	)
+
+	window.SetContent(tabs)
+	window.ShowAndRun()
+}
+
+func createInstancesTab(window fyne.Window) fyne.CanvasObject {
 	// Instance counter label
 	counterLabel := widget.NewLabel("Running Instances: 0")
 	counterLabel.TextStyle = fyne.TextStyle{Bold: true}
@@ -90,10 +104,6 @@ func main() {
 	updateInstances()
 
 	// Buttons
-	discordButton := widget.NewButtonWithIcon("Discord Server", resourceDiscordPng, func() {
-		discord_redirect.RedirectToServer(discord_link_parser.DiscordLink())
-	})
-
 	newInstanceButton := widget.NewButtonWithIcon("New Instance", resourceMorePng, func() {
 		open_app.Open("/Applications/Roblox.app")
 		time.Sleep(500 * time.Millisecond)
@@ -106,7 +116,7 @@ func main() {
 	})
 
 	// Layout
-	content := container.NewBorder(
+	return container.NewBorder(
 		container.NewVBox(
 			counterLabel,
 			widget.NewSeparator(),
@@ -115,13 +125,117 @@ func main() {
 			widget.NewSeparator(),
 			newInstanceButton,
 			closeAllButton,
-			discordButton,
 		),
 		nil,
 		nil,
 		instanceList,
 	)
+}
 
-	window.SetContent(content)
-	window.ShowAndRun()
+func createPresetsTab(window fyne.Window) fyne.CanvasObject {
+	// Load presets
+	presets, _ := preset_manager.LoadPresets()
+	var presetList *widget.List
+
+	// Preset list
+	presetList = widget.NewList(
+		func() int { return len(presets) },
+		func() fyne.CanvasObject {
+			return container.NewHBox(
+				widget.NewLabel("Preset"),
+				widget.NewButton("Launch", nil),
+				widget.NewButton("Delete", nil),
+			)
+		},
+		func(id widget.ListItemID, obj fyne.CanvasObject) {
+			if id >= len(presets) {
+				return
+			}
+
+			preset := presets[id]
+			box := obj.(*fyne.Container)
+			label := box.Objects[0].(*widget.Label)
+			launchBtn := box.Objects[1].(*widget.Button)
+			deleteBtn := box.Objects[2].(*widget.Button)
+
+			label.SetText(preset.Name)
+
+			launchBtn.OnTapped = func() {
+				preset_manager.LaunchPreset(preset)
+			}
+
+			deleteBtn.OnTapped = func() {
+				dialog.ShowConfirm("Delete Preset",
+					fmt.Sprintf("Delete preset '%s'?", preset.Name),
+					func(yes bool) {
+						if yes {
+							preset_manager.DeletePreset(id)
+							presets, _ = preset_manager.LoadPresets()
+							presetList.Refresh()
+						}
+					}, window)
+			}
+		},
+	)
+
+	// Add preset button
+	addButton := widget.NewButton("Add Preset", func() {
+		nameEntry := widget.NewEntry()
+		nameEntry.SetPlaceHolder("Preset Name (e.g., My Favorite Game)")
+
+		urlEntry := widget.NewEntry()
+		urlEntry.SetPlaceHolder("Roblox URL (e.g., roblox://placeId=123456)")
+
+		formItems := []*widget.FormItem{
+			widget.NewFormItem("Name", nameEntry),
+			widget.NewFormItem("URL", urlEntry),
+		}
+
+		dialog.ShowForm("Add Preset", "Add", "Cancel", formItems, func(ok bool) {
+			if ok && nameEntry.Text != "" && urlEntry.Text != "" {
+				preset_manager.AddPreset(nameEntry.Text, urlEntry.Text)
+				presets, _ = preset_manager.LoadPresets()
+				presetList.Refresh()
+			}
+		}, window)
+	})
+
+	// Layout
+	return container.NewBorder(
+		nil,
+		container.NewVBox(
+			widget.NewSeparator(),
+			addButton,
+			widget.NewLabel("Tip: Find game URLs on roblox.com, they look like:\nroblox://placeId=123456 or https://www.roblox.com/games/123456/"),
+		),
+		nil,
+		nil,
+		presetList,
+	)
+}
+
+func createAboutTab(window fyne.Window) fyne.CanvasObject {
+	title := widget.NewLabel("Multi Roblox Manager")
+	title.TextStyle = fyne.TextStyle{Bold: true}
+	title.Alignment = fyne.TextAlignCenter
+
+	version := widget.NewLabel("Version 2.0.0")
+	version.Alignment = fyne.TextAlignCenter
+
+	description := widget.NewLabel("Manage multiple Roblox instances with ease.\n\nFeatures:\n• Instance Counter & Manager\n• Quick Launch Presets\n• Auto-refresh instance list")
+	description.Wrapping = fyne.TextWrapWord
+
+	discordButton := widget.NewButtonWithIcon("Discord Server", resourceDiscordPng, func() {
+		discord_redirect.RedirectToServer(discord_link_parser.DiscordLink())
+	})
+
+	return container.NewVBox(
+		widget.NewSeparator(),
+		title,
+		version,
+		widget.NewSeparator(),
+		description,
+		widget.NewSeparator(),
+		discordButton,
+	)
 }
