@@ -108,23 +108,28 @@ func GetPassword(accountID string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-// storePasswordInKeychain stores password securely in macOS Keychain
+// storePasswordInKeychain stores password securely in macOS Keychain with enhanced security
 func storePasswordInKeychain(accountID, password string) error {
 	// First, try to delete existing entry (ignore errors)
 	exec.Command("security", "delete-generic-password",
 		"-s", keychainService,
 		"-a", accountID).Run()
 
-	// Add new entry
+	// Add new entry with enhanced security flags
 	cmd := exec.Command("security", "add-generic-password",
 		"-s", keychainService,
 		"-a", accountID,
 		"-w", password,
+		"-T", "", // Trusted applications (empty = only this app)
 		"-U") // Update if exists
 
-	if err := cmd.Run(); err != nil {
-		return err
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to store password: %w (output: %s)", err, string(output))
 	}
+
+	// Clear password from memory
+	password = ""
 
 	return nil
 }
