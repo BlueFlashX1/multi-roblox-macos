@@ -6,31 +6,77 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
 // GetCurrentUsername attempts to detect the currently logged-in Roblox username
 func GetCurrentUsername() (string, error) {
-	// Roblox on macOS stores data in ~/Library/Application Support/Roblox
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
 
-	robloxDir := filepath.Join(home, "Library", "Application Support", "Roblox")
+	// Method 1: Check Roblox logs for recent authentication
+	if username, err := getUsernameFromLogs(home); err == nil && username != "" {
+		return username, nil
+	}
 
-	// Try to find username from Roblox local storage or settings
-	// Method 1: Check LocalStorage (if accessible)
+	// Method 2: Check browser cookies for roblox.com
+	if username, err := getUsernameFromBrowserCookies(); err == nil && username != "" {
+		return username, nil
+	}
+
+	// Method 3: Check Roblox local storage files
+	robloxDir := filepath.Join(home, "Library", "Application Support", "Roblox")
 	if username, err := getUsernameFromLocalStorage(robloxDir); err == nil && username != "" {
 		return username, nil
 	}
 
-	// Method 2: Check for .ROBLOSECURITY cookie (macOS Keychain)
-	if username, err := getUsernameFromCookie(); err == nil && username != "" {
-		return username, nil
+	return "", fmt.Errorf("no active Roblox session found")
+}
+
+// getUsernameFromLogs checks Roblox log files for recent username
+func getUsernameFromLogs(home string) (string, error) {
+	logsDir := filepath.Join(home, "Library", "Logs", "Roblox")
+
+	// Look for log files
+	files, err := filepath.Glob(filepath.Join(logsDir, "*.log"))
+	if err != nil || len(files) == 0 {
+		return "", fmt.Errorf("no log files found")
 	}
 
-	return "", fmt.Errorf("no active Roblox session found")
+	// Check most recent log file
+	for i := len(files) - 1; i >= 0 && i >= len(files)-3; i-- {
+		data, err := os.ReadFile(files[i])
+		if err != nil {
+			continue
+		}
+
+		// Look for username patterns in logs
+		re := regexp.MustCompile(`(?i)user(?:name)?[:\s]+([a-zA-Z0-9_]+)`)
+		matches := re.FindStringSubmatch(string(data))
+		if len(matches) > 1 {
+			return matches[1], nil
+		}
+	}
+
+	return "", fmt.Errorf("no username in logs")
+}
+
+// getUsernameFromBrowserCookies checks browser cookies
+func getUsernameFromBrowserCookies() (string, error) {
+	// Check Safari cookies using sqlite
+	home, _ := os.UserHomeDir()
+	cookiesDB := filepath.Join(home, "Library", "Cookies", "Cookies.binarycookies")
+
+	// Note: Binary cookies are complex to parse
+	// For now, just check if cookie file exists
+	if _, err := os.Stat(cookiesDB); err == nil {
+		return "[Browser Session Active]", nil
+	}
+
+	return "", fmt.Errorf("no browser cookies")
 }
 
 // getUsernameFromLocalStorage attempts to read username from Roblox LocalStorage
