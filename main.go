@@ -7,11 +7,13 @@ import (
 	"insadem/multi_roblox_macos/internal/close_all_app_instances"
 	"insadem/multi_roblox_macos/internal/discord_link_parser"
 	"insadem/multi_roblox_macos/internal/discord_redirect"
+	"insadem/multi_roblox_macos/internal/instance_account_tracker"
 	"insadem/multi_roblox_macos/internal/instance_manager"
 	"insadem/multi_roblox_macos/internal/label_manager"
 	"insadem/multi_roblox_macos/internal/preset_manager"
 	"insadem/multi_roblox_macos/internal/resource_monitor"
 	"insadem/multi_roblox_macos/internal/roblox_login"
+	"insadem/multi_roblox_macos/internal/roblox_session"
 	"strconv"
 	"time"
 
@@ -144,12 +146,23 @@ func createInstancesTab(window fyne.Window) fyne.CanvasObject {
 				resourceInfo = "Stats unavailable"
 			}
 
-			// Set instance label text
+			// Set instance label text with account info
 			labelText := ""
 			if instance.Label != "" {
 				labelText = fmt.Sprintf("%s (PID: %d)", instance.Label, instance.PID)
 			} else {
 				labelText = fmt.Sprintf("Instance %d (PID: %d)", id+1, instance.PID)
+			}
+
+			// Add account info if available
+			if accountID, found := instance_account_tracker.GetAccountForInstance(instance.PID); found {
+				if account, err := account_manager.GetAccount(accountID); err == nil {
+					accountLabel := account.Username
+					if account.Label != "" {
+						accountLabel = account.Label
+					}
+					labelText += fmt.Sprintf(" - %s", accountLabel)
+				}
 			}
 
 			instanceLabel.SetText(labelText)
@@ -241,7 +254,10 @@ func createPresetsTab(window fyne.Window) fyne.CanvasObject {
 			label.SetText(preset.Name)
 
 			launchBtn.OnTapped = func() {
-				preset_manager.LaunchPreset(preset)
+				// Show account selection before launching preset
+				showAccountSelectionForPreset(window, preset, id, func() {
+					time.Sleep(500 * time.Millisecond)
+				})
 			}
 
 			deleteBtn.OnTapped = func() {
@@ -261,7 +277,7 @@ func createPresetsTab(window fyne.Window) fyne.CanvasObject {
 	// Add preset button
 	addButton := widget.NewButton("Add Preset", func() {
 		nameEntry := widget.NewEntry()
-		nameEntry.SetPlaceHolder("Preset Name (e.g., My Favorite Game)")
+		nameEntry.SetPlaceHolder("Name (optional - auto-fetched from URL)")
 
 		urlEntry := widget.NewEntry()
 		urlEntry.SetPlaceHolder("Roblox URL (e.g., roblox://placeId=123456)")
@@ -271,13 +287,38 @@ func createPresetsTab(window fyne.Window) fyne.CanvasObject {
 			widget.NewFormItem("URL", urlEntry),
 		}
 
-		dialog.ShowForm("Add Preset", "Add", "Cancel", formItems, func(ok bool) {
-			if ok && nameEntry.Text != "" && urlEntry.Text != "" {
-				preset_manager.AddPreset(nameEntry.Text, urlEntry.Text)
-				presets, _ = preset_manager.LoadPresets()
-				presetList.Refresh()
+		infoLabel := widget.NewLabel("Leave name blank to auto-fetch game name and thumbnail")
+		infoLabel.Wrapping = fyne.TextWrapWord
+
+		formContainer := container.NewVBox()
+		for _, item := range formItems {
+			formContainer.Add(widget.NewLabel(item.Text))
+			formContainer.Add(item.Widget)
+		}
+
+		content := container.NewVBox(
+			infoLabel,
+			widget.NewSeparator(),
+			formContainer,
+		)
+
+		customDialog := dialog.NewCustomConfirm("Add Preset", "Add", "Cancel", content, func(ok bool) {
+			if ok && urlEntry.Text != "" {
+				// Show loading message
+				progress := dialog.NewProgressInfinite("Fetching Game Info", "Please wait...", window)
+				progress.Show()
+
+				// Add preset (will auto-fetch if name is empty)
+				go func() {
+					preset_manager.AddPreset(nameEntry.Text, urlEntry.Text)
+					presets, _ = preset_manager.LoadPresets()
+					progress.Hide()
+					presetList.Refresh()
+				}()
 			}
 		}, window)
+
+		customDialog.Show()
 	})
 
 	// Layout
@@ -299,10 +340,10 @@ func createAboutTab(window fyne.Window) fyne.CanvasObject {
 	title.TextStyle = fyne.TextStyle{Bold: true}
 	title.Alignment = fyne.TextAlignCenter
 
-	version := widget.NewLabel("Version 2.0.0")
+	version := widget.NewLabel("Version 2.2.0")
 	version.Alignment = fyne.TextAlignCenter
 
-	description := widget.NewLabel("Manage multiple Roblox instances with ease.\n\nFeatures:\n• Instance Counter & Manager\n• Quick Launch Presets\n• Auto-refresh instance list")
+	description := widget.NewLabel("Manage multiple Roblox instances with ease.\n\nFeatures:\n• Instance Counter & Manager with Account Tracking\n• Quick Launch Presets with Auto-fetch\n• Account Management with Keychain Security\n• Resource Monitor\n• Instance Labeling")
 	description.Wrapping = fyne.TextWrapWord
 
 	discordButton := widget.NewButtonWithIcon("Discord Server", resourceDiscordPng, func() {
@@ -324,6 +365,14 @@ func createAccountsTab(window fyne.Window) fyne.CanvasObject {
 	// Load accounts
 	accounts, _ := account_manager.LoadAccounts()
 	var accountList *widget.List
+
+	// Detect current logged-in account
+	currentUsername, _ := roblox_session.GetCurrentUsername()
+	currentAccountLabel := widget.NewLabel("Current Account: Not detected")
+	if currentUsername != "" {
+		currentAccountLabel.SetText(fmt.Sprintf("Current Account: %s", currentUsername))
+	}
+	currentAccountLabel.TextStyle = fyne.TextStyle{Bold: true}
 
 	// Account list
 	accountList = widget.NewList(
@@ -407,7 +456,10 @@ func createAccountsTab(window fyne.Window) fyne.CanvasObject {
 
 	// Layout
 	return container.NewBorder(
-		nil,
+		container.NewVBox(
+			currentAccountLabel,
+			widget.NewSeparator(),
+		),
 		container.NewVBox(
 			widget.NewSeparator(),
 			infoLabel,
@@ -569,15 +621,100 @@ func showAccountSelectionDialog(window fyne.Window, launchCallback func()) {
 				}
 			}
 
+			var selectedAccountID string
 			if selectedIndex == 0 {
 				// Launch without account
 				roblox_login.LaunchWithoutAccount()
 			} else if selectedIndex > 0 {
 				// Launch with selected account
 				account := accounts[selectedIndex-1]
+				selectedAccountID = account.ID
 				password, _ := account_manager.GetPassword(account.ID)
 				roblox_login.LaunchWithAccount(account.Username, password)
 			}
+
+			// Track which account was used (will be associated with PID after launch)
+			// Note: We can't get PID immediately, tracking will be done via cleanup
+			if selectedAccountID != "" {
+				// Instance will be tracked when it appears in next refresh
+			}
+
+			launchCallback()
+		}
+	}, window)
+}
+
+// showAccountSelectionForPreset shows account selection for preset launch
+func showAccountSelectionForPreset(window fyne.Window, preset preset_manager.Preset, presetIndex int, launchCallback func()) {
+	accounts, err := account_manager.LoadAccounts()
+	if err != nil || len(accounts) == 0 {
+		// No accounts, just launch preset
+		preset_manager.LaunchPreset(preset)
+		launchCallback()
+		return
+	}
+
+	// Create account selection options with last used account pre-selected
+	var options []string
+	options = append(options, "Launch without account")
+	defaultSelection := 0
+
+	for i, acc := range accounts {
+		displayText := acc.Username
+		if acc.Label != "" {
+			displayText = fmt.Sprintf("%s (%s)", acc.Label, acc.Username)
+		}
+
+		// Pre-select last used account for this preset
+		if preset.LastAccountUsed == acc.ID {
+			defaultSelection = i + 1
+		}
+
+		options = append(options, displayText)
+	}
+
+	selectWidget := widget.NewSelect(options, nil)
+	selectWidget.SetSelected(options[defaultSelection])
+
+	infoLabel := widget.NewLabel(fmt.Sprintf("Select account to launch '%s'", preset.Name))
+	infoLabel.Wrapping = fyne.TextWrapWord
+
+	content := container.NewVBox(
+		infoLabel,
+		widget.NewSeparator(),
+		widget.NewLabel("Account:"),
+		selectWidget,
+	)
+
+	dialog.ShowCustomConfirm("Launch Preset", "Launch", "Cancel", content, func(launch bool) {
+		if launch {
+			selectedIndex := -1
+			for i, opt := range options {
+				if opt == selectWidget.Selected {
+					selectedIndex = i
+					break
+				}
+			}
+
+			var selectedAccountID string
+			if selectedIndex == 0 {
+				// Launch without account
+				preset_manager.LaunchPreset(preset)
+			} else if selectedIndex > 0 {
+				// Launch with selected account
+				account := accounts[selectedIndex-1]
+				selectedAccountID = account.ID
+				password, _ := account_manager.GetPassword(account.ID)
+
+				// Launch preset with account
+				roblox_login.LaunchWithAccount(account.Username, password)
+				time.Sleep(500 * time.Millisecond)
+				preset_manager.LaunchPreset(preset)
+
+				// Save last used account for this preset
+				preset_manager.UpdatePresetLastAccount(presetIndex, selectedAccountID)
+			}
+
 			launchCallback()
 		}
 	}, window)

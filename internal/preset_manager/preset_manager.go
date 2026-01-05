@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"insadem/multi_roblox_macos/internal/open_app"
+	"insadem/multi_roblox_macos/internal/roblox_api"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,8 +12,11 @@ import (
 
 // Preset represents a saved Roblox game shortcut
 type Preset struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
+	Name         string `json:"name"`
+	URL          string `json:"url"`
+	PlaceID      int64  `json:"place_id,omitempty"`
+	ThumbnailURL string `json:"thumbnail_url,omitempty"`
+	LastAccountUsed string `json:"last_account_used,omitempty"`
 }
 
 // Config stores all presets
@@ -74,14 +78,45 @@ func SavePresets(presets []Preset) error {
 	return os.WriteFile(configPath, data, 0644)
 }
 
-// AddPreset adds a new preset
+// AddPreset adds a new preset with auto-fetched game info
 func AddPreset(name, url string) error {
 	presets, err := LoadPresets()
 	if err != nil {
 		return err
 	}
 
-	presets = append(presets, Preset{Name: name, URL: url})
+	preset := Preset{Name: name, URL: url}
+
+	// Try to auto-fetch game info
+	if placeID, err := roblox_api.ExtractPlaceID(url); err == nil {
+		preset.PlaceID = placeID
+
+		// Fetch game info
+		if gameInfo, err := roblox_api.GetGameInfo(placeID); err == nil {
+			// Use fetched name if user didn't provide one
+			if name == "" {
+				preset.Name = gameInfo.Name
+			}
+			preset.ThumbnailURL = gameInfo.ThumbnailURL
+		}
+	}
+
+	presets = append(presets, preset)
+	return SavePresets(presets)
+}
+
+// UpdatePresetLastAccount updates the last used account for a preset
+func UpdatePresetLastAccount(index int, accountID string) error {
+	presets, err := LoadPresets()
+	if err != nil {
+		return err
+	}
+
+	if index < 0 || index >= len(presets) {
+		return fmt.Errorf("invalid preset index")
+	}
+
+	presets[index].LastAccountUsed = accountID
 	return SavePresets(presets)
 }
 
