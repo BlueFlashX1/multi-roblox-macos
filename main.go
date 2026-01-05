@@ -3,14 +3,15 @@ package main
 import (
 	"fmt"
 	"image/color"
+	"insadem/multi_roblox_macos/internal/account_manager"
 	"insadem/multi_roblox_macos/internal/close_all_app_instances"
 	"insadem/multi_roblox_macos/internal/discord_link_parser"
 	"insadem/multi_roblox_macos/internal/discord_redirect"
 	"insadem/multi_roblox_macos/internal/instance_manager"
 	"insadem/multi_roblox_macos/internal/label_manager"
-	"insadem/multi_roblox_macos/internal/open_app"
 	"insadem/multi_roblox_macos/internal/preset_manager"
 	"insadem/multi_roblox_macos/internal/resource_monitor"
+	"insadem/multi_roblox_macos/internal/roblox_login"
 	"strconv"
 	"time"
 
@@ -35,6 +36,7 @@ func main() {
 	tabs := container.NewAppTabs(
 		container.NewTabItem("Instances", createInstancesTab(window)),
 		container.NewTabItem("Presets", createPresetsTab(window)),
+		container.NewTabItem("Accounts", createAccountsTab(window)),
 		container.NewTabItem("About", createAboutTab(window)),
 	)
 
@@ -181,9 +183,10 @@ func createInstancesTab(window fyne.Window) fyne.CanvasObject {
 
 	// Buttons
 	newInstanceButton := widget.NewButtonWithIcon("New Instance", resourceMorePng, func() {
-		open_app.Open("/Applications/Roblox.app")
-		time.Sleep(500 * time.Millisecond)
-		updateInstances()
+		showAccountSelectionDialog(window, func() {
+			time.Sleep(500 * time.Millisecond)
+			updateInstances()
+		})
 	})
 
 	closeAllButton := widget.NewButtonWithIcon("Close All", resourceMopPng, func() {
@@ -317,6 +320,106 @@ func createAboutTab(window fyne.Window) fyne.CanvasObject {
 	)
 }
 
+func createAccountsTab(window fyne.Window) fyne.CanvasObject {
+	// Load accounts
+	accounts, _ := account_manager.LoadAccounts()
+	var accountList *widget.List
+
+	// Account list
+	accountList = widget.NewList(
+		func() int { return len(accounts) },
+		func() fyne.CanvasObject {
+			return container.NewHBox(
+				widget.NewLabel("Account"),
+				widget.NewButton("Edit", nil),
+				widget.NewButton("Delete", nil),
+			)
+		},
+		func(id widget.ListItemID, obj fyne.CanvasObject) {
+			if id >= len(accounts) {
+				return
+			}
+
+			account := accounts[id]
+			box := obj.(*fyne.Container)
+			label := box.Objects[0].(*widget.Label)
+			editBtn := box.Objects[1].(*widget.Button)
+			deleteBtn := box.Objects[2].(*widget.Button)
+
+			displayText := account.Username
+			if account.Label != "" {
+				displayText = fmt.Sprintf("%s (%s)", account.Label, account.Username)
+			}
+			label.SetText(displayText)
+
+			editBtn.OnTapped = func() {
+				showEditAccountDialog(window, account.ID, func() {
+					accounts, _ = account_manager.LoadAccounts()
+					accountList.Refresh()
+				})
+			}
+
+			deleteBtn.OnTapped = func() {
+				dialog.ShowConfirm("Delete Account",
+					fmt.Sprintf("Delete account '%s'?\n\nPassword will be removed from Keychain.", account.Username),
+					func(yes bool) {
+						if yes {
+							account_manager.DeleteAccount(account.ID)
+							accounts, _ = account_manager.LoadAccounts()
+							accountList.Refresh()
+						}
+					}, window)
+			}
+		},
+	)
+
+	// Add account button
+	addButton := widget.NewButton("Add Account", func() {
+		usernameEntry := widget.NewEntry()
+		usernameEntry.SetPlaceHolder("Roblox Username")
+
+		passwordEntry := widget.NewPasswordEntry()
+		passwordEntry.SetPlaceHolder("Roblox Password")
+
+		labelEntry := widget.NewEntry()
+		labelEntry.SetPlaceHolder("Label (e.g., Main Account, Alt 1)")
+
+		formItems := []*widget.FormItem{
+			widget.NewFormItem("Username", usernameEntry),
+			widget.NewFormItem("Password", passwordEntry),
+			widget.NewFormItem("Label", labelEntry),
+		}
+
+		dialog.ShowForm("Add Account", "Add", "Cancel", formItems, func(ok bool) {
+			if ok && usernameEntry.Text != "" && passwordEntry.Text != "" {
+				if err := account_manager.AddAccount(usernameEntry.Text, passwordEntry.Text, labelEntry.Text); err != nil {
+					dialog.ShowError(fmt.Errorf("Failed to add account: %w", err), window)
+				} else {
+					accounts, _ = account_manager.LoadAccounts()
+					accountList.Refresh()
+				}
+			}
+		}, window)
+	})
+
+	infoLabel := widget.NewLabel("Accounts are stored securely in macOS Keychain.\nPasswords are never saved to disk.")
+	infoLabel.Wrapping = fyne.TextWrapWord
+
+	// Layout
+	return container.NewBorder(
+		nil,
+		container.NewVBox(
+			widget.NewSeparator(),
+			infoLabel,
+			widget.NewSeparator(),
+			addButton,
+		),
+		nil,
+		nil,
+		accountList,
+	)
+}
+
 // showLabelDialog shows a dialog to label an instance
 func showLabelDialog(window fyne.Window, pid int, refreshCallback func()) {
 	labelEntry := widget.NewEntry()
@@ -395,4 +498,87 @@ func parseHexColor(s string) (color.Color, error) {
 	c.B = uint8(b)
 
 	return c, nil
+}
+
+// showEditAccountDialog shows a dialog to edit account label
+func showEditAccountDialog(window fyne.Window, accountID string, refreshCallback func()) {
+	account, err := account_manager.GetAccount(accountID)
+	if err != nil {
+		dialog.ShowError(err, window)
+		return
+	}
+
+	labelEntry := widget.NewEntry()
+	labelEntry.SetText(account.Label)
+	labelEntry.SetPlaceHolder("Label (e.g., Main Account, Alt 1)")
+
+	formItems := []*widget.FormItem{
+		widget.NewFormItem("Username", widget.NewLabel(account.Username)),
+		widget.NewFormItem("Label", labelEntry),
+	}
+
+	dialog.ShowForm("Edit Account", "Save", "Cancel", formItems, func(ok bool) {
+		if ok {
+			account_manager.UpdateAccountLabel(accountID, labelEntry.Text)
+			refreshCallback()
+		}
+	}, window)
+}
+
+// showAccountSelectionDialog shows account selection when launching new instance
+func showAccountSelectionDialog(window fyne.Window, launchCallback func()) {
+	accounts, err := account_manager.LoadAccounts()
+	if err != nil || len(accounts) == 0 {
+		// No accounts configured, just launch without account
+		roblox_login.LaunchWithoutAccount()
+		launchCallback()
+		return
+	}
+
+	// Create account selection options
+	var options []string
+	options = append(options, "Launch without account")
+	for _, acc := range accounts {
+		displayText := acc.Username
+		if acc.Label != "" {
+			displayText = fmt.Sprintf("%s (%s)", acc.Label, acc.Username)
+		}
+		options = append(options, displayText)
+	}
+
+	selectWidget := widget.NewSelect(options, nil)
+	selectWidget.SetSelected(options[0])
+
+	infoLabel := widget.NewLabel("Select an account to launch with, or launch without logging in.\n\nNote: Manual login required - automatic login coming in future update.")
+	infoLabel.Wrapping = fyne.TextWrapWord
+
+	content := container.NewVBox(
+		infoLabel,
+		widget.NewSeparator(),
+		widget.NewLabel("Account:"),
+		selectWidget,
+	)
+
+	dialog.ShowCustomConfirm("Launch Roblox Instance", "Launch", "Cancel", content, func(launch bool) {
+		if launch {
+			selectedIndex := -1
+			for i, opt := range options {
+				if opt == selectWidget.Selected {
+					selectedIndex = i
+					break
+				}
+			}
+
+			if selectedIndex == 0 {
+				// Launch without account
+				roblox_login.LaunchWithoutAccount()
+			} else if selectedIndex > 0 {
+				// Launch with selected account
+				account := accounts[selectedIndex-1]
+				password, _ := account_manager.GetPassword(account.ID)
+				roblox_login.LaunchWithAccount(account.Username, password)
+			}
+			launchCallback()
+		}
+	}, window)
 }
