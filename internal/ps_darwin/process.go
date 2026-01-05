@@ -38,3 +38,8 @@ func Processes() ([]Process, error) {
 func FindProcess(pid int) (Process, error) {
 	return findProcess(pid)
 }
+
+// KillProcess kills a process by pid.
+func KillProcess(pid int) error {
+	return killProcess(pid)
+}

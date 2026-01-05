@@ -43,6 +43,10 @@ func findProcess(pid int) (Process, error) {
 	return nil, nil
 }
 
+func killProcess(pid int) error {
+	return syscall.Kill(pid, syscall.SIGTERM)
+}
+
 func processes() ([]Process, error) {
 	buf, err := darwinSyscall()
 	if err != nil {
