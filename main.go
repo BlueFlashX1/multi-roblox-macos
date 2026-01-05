@@ -14,6 +14,7 @@ import (
 	"insadem/multi_roblox_macos/internal/resource_monitor"
 	"insadem/multi_roblox_macos/internal/roblox_login"
 	"insadem/multi_roblox_macos/internal/roblox_session"
+	"insadem/multi_roblox_macos/internal/thumbnail_cache"
 	"strconv"
 	"time"
 
@@ -230,14 +231,37 @@ func createPresetsTab(window fyne.Window) fyne.CanvasObject {
 	presets, _ := preset_manager.LoadPresets()
 	var presetList *widget.List
 
-	// Preset list
+	// Preset list with card layout
 	presetList = widget.NewList(
 		func() int { return len(presets) },
 		func() fyne.CanvasObject {
-			return container.NewHBox(
-				widget.NewLabel("Preset"),
+			// Create card-style layout with thumbnail
+			thumbnail := canvas.NewImageFromFile("")
+			thumbnail.FillMode = canvas.ImageFillContain
+			thumbnail.SetMinSize(fyne.NewSize(80, 80))
+
+			nameLabel := widget.NewLabel("Game Name")
+			nameLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+			urlLabel := widget.NewLabel("URL")
+			urlLabel.TextStyle = fyne.TextStyle{Italic: true}
+
+			buttonBox := container.NewHBox(
 				widget.NewButton("Launch", nil),
 				widget.NewButton("Delete", nil),
+			)
+
+			infoBox := container.NewVBox(
+				nameLabel,
+				urlLabel,
+				buttonBox,
+			)
+
+			return container.NewBorder(
+				nil, nil,
+				thumbnail, // Left: thumbnail
+				nil,
+				infoBox, // Center: game info and buttons
 			)
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
@@ -246,15 +270,50 @@ func createPresetsTab(window fyne.Window) fyne.CanvasObject {
 			}
 
 			preset := presets[id]
-			box := obj.(*fyne.Container)
-			label := box.Objects[0].(*widget.Label)
-			launchBtn := box.Objects[1].(*widget.Button)
-			deleteBtn := box.Objects[2].(*widget.Button)
+			border := obj.(*fyne.Container)
 
-			label.SetText(preset.Name)
+			thumbnail := border.Objects[2].(*canvas.Image)     // Left
+			infoBox := border.Objects[4].(*fyne.Container)     // Center
+
+			nameLabel := infoBox.Objects[0].(*widget.Label)
+			urlLabel := infoBox.Objects[1].(*widget.Label)
+			buttonBox := infoBox.Objects[2].(*fyne.Container)
+
+			launchBtn := buttonBox.Objects[0].(*widget.Button)
+			deleteBtn := buttonBox.Objects[1].(*widget.Button)
+
+			// Set game name
+			nameLabel.SetText(preset.Name)
+
+			// Set URL (truncated)
+			urlText := preset.URL
+			if len(urlText) > 40 {
+				urlText = urlText[:37] + "..."
+			}
+			urlLabel.SetText(urlText)
+
+			// Load and display thumbnail
+			if preset.ThumbnailURL != "" {
+				// Try to get cached thumbnail first
+				if cachedPath, found := thumbnail_cache.GetCachedThumbnail(preset.ThumbnailURL); found {
+					thumbnail.File = cachedPath
+					thumbnail.Refresh()
+				} else {
+					// Download and cache in background
+					go func() {
+						if localPath, err := thumbnail_cache.DownloadAndCacheThumbnail(preset.ThumbnailURL); err == nil {
+							thumbnail.File = localPath
+							thumbnail.Refresh()
+						}
+					}()
+				}
+			} else {
+				// No thumbnail - show placeholder
+				thumbnail.Resource = nil
+				thumbnail.File = ""
+			}
 
 			launchBtn.OnTapped = func() {
-				// Show account selection before launching preset
 				showAccountSelectionForPreset(window, preset, id, func() {
 					time.Sleep(500 * time.Millisecond)
 				})
