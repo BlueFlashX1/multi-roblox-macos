@@ -1526,31 +1526,70 @@ func showAccountSelectionDialog(window fyne.Window, launchCallback func()) {
 					return
 				}
 
-				// Write cookie to Roblox's storage before launching
-				if err := cookie_manager.SetRobloxAppCookie(cookie.Value); err != nil {
-					logger.LogError("Failed to set Roblox app cookie: %v", err)
-					// Continue anyway - might still work
+				// Check if Roblox is already running
+				instances, _ := instance_manager.GetRunningInstances()
+				isRobloxRunning := len(instances) > 0
+
+				if isRobloxRunning {
+					// MULTI-INSTANCE: Use auth ticket approach to avoid kicking existing sessions
+					// Auth tickets are passed via URL and don't touch shared cookie storage
+					logger.LogInfo("Roblox already running - using auth ticket approach to preserve existing sessions")
+
+					authTicket, err := cookie_manager.GetAuthTicket(cookie.Value)
+					if err != nil {
+						dialog.ShowError(fmt.Errorf("Failed to get auth ticket: %v\n\nTry using the Presets tab to launch a specific game.", err), window)
+						return
+					}
+
+					// Use Roblox Hub (PlaceID 10275826693) as a safe landing spot
+					// This is Roblox's official hub experience
+					hubPreset := preset_manager.Preset{
+						Name:    "Roblox Hub",
+						PlaceID: 10275826693,
+					}
+					pid, err := preset_manager.LaunchPresetWithTicket(hubPreset, authTicket)
+					if err != nil {
+						dialog.ShowError(fmt.Errorf("Failed to launch: %v", err), window)
+						return
+					}
+
+					if pid > 0 {
+						instance_account_tracker.TrackInstance(pid, account.ID)
+						logger.LogInfo("Tracked instance PID %d with account %s", pid, account.Username)
+					}
+
+					customDialog.Hide()
+					launchCallback()
+
+					dialog.ShowInformation("Instance Launched",
+						fmt.Sprintf("Launched new instance as %s!\n\nOpening Roblox Hub. Your other instances are preserved.", account.Username),
+						window)
+				} else {
+					// FIRST INSTANCE: Safe to write cookie to shared storage
+					logger.LogInfo("No Roblox running - using cookie storage approach")
+
+					if err := cookie_manager.SetRobloxAppCookie(cookie.Value); err != nil {
+						logger.LogError("Failed to set Roblox app cookie: %v", err)
+					}
+
+					pid, err := preset_manager.LaunchRobloxHomeWithAccount(cookie.Value)
+					if err != nil {
+						dialog.ShowError(fmt.Errorf("Failed to launch: %v", err), window)
+						return
+					}
+
+					if pid > 0 {
+						instance_account_tracker.TrackInstance(pid, account.ID)
+						logger.LogInfo("Tracked instance PID %d with account %s", pid, account.Username)
+					}
+
+					customDialog.Hide()
+					launchCallback()
+
+					dialog.ShowInformation("Instance Launched",
+						fmt.Sprintf("Launched Roblox home as %s!", account.Username),
+						window)
 				}
-
-				// Launch Roblox home with multi-instance support
-				pid, err := preset_manager.LaunchRobloxHomeWithAccount(cookie.Value)
-				if err != nil {
-					dialog.ShowError(fmt.Errorf("Failed to launch: %v", err), window)
-					return
-				}
-
-				// Track which account this instance belongs to
-				if pid > 0 {
-					instance_account_tracker.TrackInstance(pid, account.ID)
-					logger.LogInfo("Tracked instance PID %d with account %s", pid, account.Username)
-				}
-
-				customDialog.Hide()
-				launchCallback()
-
-				dialog.ShowInformation("Instance Launched",
-					fmt.Sprintf("Launched Roblox home as %s!\n\nThe app will open to the home screen.", account.Username),
-					window)
 			} else if result.Status == cookie_manager.CookieStatusExpired {
 				dialog.ShowError(fmt.Errorf("Cookie for %s has expired!\n\nGo to Accounts tab and click 'Recapture' to refresh it.", account.Username), window)
 			} else {
