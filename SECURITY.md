@@ -1,15 +1,19 @@
 # Security Architecture - Multi Roblox Manager
 
 ## Overview
+
 This document details the security measures implemented to protect user credentials and sensitive data.
 
 ## Password Storage
 
 ### ❌ NEVER Stored on Disk
+
 **Passwords are NEVER saved to any file, database, or disk storage.**
 
 ### ✅ macOS Keychain Only
+
 All passwords are stored exclusively in the **macOS Keychain**, which provides:
+
 - **Hardware encryption** (Secure Enclave on modern Macs)
 - **User authentication** required to access
 - **Per-app access control**
@@ -17,6 +21,7 @@ All passwords are stored exclusively in the **macOS Keychain**, which provides:
 - **System-level security** managed by macOS
 
 ### Implementation Details
+
 ```bash
 # Password is stored with these security flags:
 security add-generic-password \
@@ -28,6 +33,7 @@ security add-generic-password \
 ```
 
 **Key Security Features:**
+
 1. `-T ""` flag = **App-specific access** - Only this app can access the password
 2. macOS prompts for user authentication when accessing passwords
 3. Passwords encrypted with user's login keychain master key
@@ -36,6 +42,7 @@ security add-generic-password \
 ## Data Storage Locations
 
 ### Account Metadata (Username, Labels)
+
 **File**: `~/Library/Application Support/multi_roblox_macos/accounts.json`
 **Contains**: Usernames, labels, account IDs
 **Does NOT contain**: Passwords, cookies, tokens
@@ -51,18 +58,21 @@ security add-generic-password \
 ```
 
 ### Instance Tracking
+
 **File**: `~/Library/Application Support/multi_roblox_macos/instance_accounts.json`
 **Contains**: PID → Account ID mappings
 **Permissions**: `0600`
 
 ### Presets
+
 **File**: `~/Library/Application Support/multi_roblox_macos/presets.json`
-**Contains**: Game names, URLs, thumbnails, last used account ID
-**Permissions**: `0644` (readable by user)
+**Contains**: Game names, URLs, thumbnails, last used account ID, private server links
+**Permissions**: `0600` (owner read/write only)
 
 ## Security Guarantees
 
 ### ✅ What IS Secure
+
 1. **Passwords**: macOS Keychain with hardware encryption
 2. **File permissions**: User-only access (`0600`)
 3. **No plaintext secrets**: Passwords never in memory longer than needed
@@ -72,6 +82,7 @@ security add-generic-password \
 7. **Timeout protection**: 10s limit on all HTTP requests
 
 ### ⚠️ User Responsibility
+
 1. **macOS login password** protects Keychain
 2. **System security** - Keep macOS updated
 3. **FileVault** recommended for full disk encryption
@@ -80,23 +91,29 @@ security add-generic-password \
 ## Multi-User Safety
 
 ### ✅ Automatic Isolation
+
 **Each macOS user account has:**
+
 - Separate Keychain (cannot access other users' passwords)
 - Separate `~/Library` directory
 - Separate app data storage
 
 **If someone else downloads the app on the SAME Mac:**
+
 - ✅ **Different macOS user** = Complete isolation, cannot access your data
 - ⚠️ **Same macOS user** = Can access data (as intended for that user)
 
 ### Protection Against Shared Downloads
+
 The app is **safe to share** because:
+
 1. Each macOS user has their own Keychain
 2. File paths use `~` (home directory) which is user-specific
 3. No global/system-wide storage
 4. Keychain requires macOS user authentication
 
 **Example:**
+
 - User A downloads app → Stores passwords in User A's Keychain
 - User B downloads same app → Stores passwords in User B's Keychain
 - **User A cannot access User B's passwords** (and vice versa)
@@ -104,6 +121,7 @@ The app is **safe to share** because:
 ## Network Security
 
 ### HTTPS Client Configuration
+
 ```go
 client := &http.Client{
     Timeout: 10 * time.Second,
@@ -116,6 +134,7 @@ client := &http.Client{
 ```
 
 ### API Endpoints (Read-Only)
+
 - `games.roblox.com` - Game information
 - `thumbnails.roblox.com` - Game icons
 - `apis.roblox.com` - Universe/Place ID lookup
@@ -125,6 +144,7 @@ client := &http.Client{
 ## Threat Model
 
 ### ✅ Protected Against
+
 1. **Malware reading password files** - No password files exist
 2. **Other apps accessing passwords** - Keychain app-specific access
 3. **Network eavesdropping** - TLS 1.2+ encryption
@@ -133,6 +153,7 @@ client := &http.Client{
 6. **Memory dumps** - Passwords cleared after use
 
 ### ⚠️ Cannot Protect Against
+
 1. **Compromised macOS user account** - If attacker has your Mac login, they have Keychain access
 2. **Keyloggers** - If malware logs keyboard, it can capture passwords when entered
 3. **Screen recording malware** - Can see passwords if shown on screen
@@ -141,6 +162,7 @@ client := &http.Client{
 ## Best Practices for Users
 
 ### Recommended
+
 1. ✅ Use strong macOS login password
 2. ✅ Enable FileVault (full disk encryption)
 3. ✅ Lock Mac when away (⌘L)
@@ -148,6 +170,7 @@ client := &http.Client{
 5. ✅ Use different password for each Roblox account
 
 ### Optional
+
 1. Use Touch ID/Face ID for Keychain access
 2. Enable firmware password (prevents boot from external drive)
 3. Regular security audits: `security dump-keychain`
@@ -155,12 +178,14 @@ client := &http.Client{
 ## Compliance Notes
 
 ### Data Retention
+
 - **Passwords**: Deleted when account is removed from app
 - **Metadata**: Deleted when account is removed
 - **Instance tracking**: Auto-cleaned when instances close
 - **Presets**: User-managed, persists until deleted
 
 ### Privacy
+
 - **No telemetry** - App does not send usage data anywhere
 - **No analytics** - No tracking of any kind
 - **Local-only** - All data stays on your Mac
@@ -182,6 +207,7 @@ client := &http.Client{
 ## Reporting Security Issues
 
 If you discover a security vulnerability, please:
+
 1. **Do NOT** open a public GitHub issue
 2. Contact the maintainer privately
 3. Provide details of the vulnerability
@@ -190,4 +216,4 @@ If you discover a security vulnerability, please:
 ---
 
 **Last Updated**: 2026-01-05
-**Version**: 2.2.0
+**Version**: 3.1.0

@@ -69,7 +69,7 @@ func SaveLabels(labels []InstanceLabel) error {
 		return err
 	}
 
-	return os.WriteFile(configPath, data, 0644)
+	return os.WriteFile(configPath, data, 0600) // Secure permissions - owner only
 }
 
 // GetLabel returns the label for a specific PID

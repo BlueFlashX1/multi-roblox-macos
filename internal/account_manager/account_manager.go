@@ -3,6 +3,7 @@ package account_manager
 import (
 	"encoding/json"
 	"fmt"
+	"insadem/multi_roblox_macos/internal/logger"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -69,18 +70,24 @@ func SaveAccounts(accounts []Account) error {
 
 // AddAccount adds a new account with secure password storage
 func AddAccount(username, password, label string) error {
+	logger.LogInfo("AddAccount called for username: %s, label: %s", username, label)
+
 	accounts, err := LoadAccounts()
 	if err != nil {
+		logger.LogError("Failed to load accounts: %v", err)
 		return err
 	}
 
 	// Generate unique ID
 	id := fmt.Sprintf("account_%d", len(accounts)+1)
+	logger.LogDebug("Generated account ID: %s", id)
 
 	// Store password in macOS Keychain
 	if err := storePasswordInKeychain(id, password); err != nil {
+		logger.LogError("Failed to store password in keychain for %s: %v", username, err)
 		return fmt.Errorf("failed to store password in keychain: %w", err)
 	}
+	logger.LogDebug("Password stored in keychain for account ID: %s", id)
 
 	// Add account metadata (no password stored here)
 	account := Account{
@@ -90,7 +97,13 @@ func AddAccount(username, password, label string) error {
 	}
 
 	accounts = append(accounts, account)
-	return SaveAccounts(accounts)
+	if err := SaveAccounts(accounts); err != nil {
+		logger.LogError("Failed to save accounts: %v", err)
+		return err
+	}
+
+	logger.LogInfo("Account added successfully: %s (ID: %s)", username, id)
+	return nil
 }
 
 // GetPassword retrieves password from macOS Keychain
@@ -136,9 +149,21 @@ func storePasswordInKeychain(accountID, password string) error {
 
 // DeleteAccount removes account and its password from keychain
 func DeleteAccount(accountID string) error {
+	logger.LogInfo("DeleteAccount called for ID: %s", accountID)
+
 	accounts, err := LoadAccounts()
 	if err != nil {
+		logger.LogError("Failed to load accounts: %v", err)
 		return err
+	}
+
+	// Find the account being deleted for logging
+	var deletedUsername string
+	for _, acc := range accounts {
+		if acc.ID == accountID {
+			deletedUsername = acc.Username
+			break
+		}
 	}
 
 	// Remove from accounts list
@@ -150,11 +175,21 @@ func DeleteAccount(accountID string) error {
 	}
 
 	// Delete password from keychain
-	exec.Command("security", "delete-generic-password",
+	if err := exec.Command("security", "delete-generic-password",
 		"-s", keychainService,
-		"-a", accountID).Run() // Ignore errors
+		"-a", accountID).Run(); err != nil {
+		logger.LogDebug("Keychain entry deletion returned: %v (may not exist)", err)
+	} else {
+		logger.LogDebug("Password removed from keychain for ID: %s", accountID)
+	}
 
-	return SaveAccounts(newAccounts)
+	if err := SaveAccounts(newAccounts); err != nil {
+		logger.LogError("Failed to save accounts after deletion: %v", err)
+		return err
+	}
+
+	logger.LogInfo("Account deleted successfully: %s (ID: %s)", deletedUsername, accountID)
+	return nil
 }
 
 // GetAccount finds an account by ID
@@ -175,17 +210,27 @@ func GetAccount(accountID string) (*Account, error) {
 
 // UpdateAccountLabel updates the label for an account
 func UpdateAccountLabel(accountID, newLabel string) error {
+	logger.LogInfo("UpdateAccountLabel called for ID: %s, new label: %s", accountID, newLabel)
+
 	accounts, err := LoadAccounts()
 	if err != nil {
+		logger.LogError("Failed to load accounts: %v", err)
 		return err
 	}
 
 	for i := range accounts {
 		if accounts[i].ID == accountID {
+			oldLabel := accounts[i].Label
 			accounts[i].Label = newLabel
-			return SaveAccounts(accounts)
+			if err := SaveAccounts(accounts); err != nil {
+				logger.LogError("Failed to save accounts after label update: %v", err)
+				return err
+			}
+			logger.LogInfo("Account label updated: %s -> %s (ID: %s)", oldLabel, newLabel, accountID)
+			return nil
 		}
 	}
 
+	logger.LogError("Account not found for ID: %s", accountID)
 	return fmt.Errorf("account not found")
 }

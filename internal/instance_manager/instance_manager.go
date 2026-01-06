@@ -1,6 +1,7 @@
 package instance_manager
 
 import (
+	"insadem/multi_roblox_macos/internal/instance_account_tracker"
 	"insadem/multi_roblox_macos/internal/label_manager"
 	"insadem/multi_roblox_macos/internal/ps_darwin"
 	"time"
@@ -26,7 +27,10 @@ func GetRunningInstances() ([]Instance, error) {
 	var pids []int
 
 	for _, proc := range processes {
-		if proc.Executable() == "RobloxPlayer" {
+		// Only count actual RobloxPlayer, not RobloxCrashHandler or other helpers
+		// ps_darwin truncates names to 16 chars, so check prefix
+		execName := proc.Executable()
+		if execName == "RobloxPlayer" {
 			pid := proc.Pid()
 			pids = append(pids, pid)
 
@@ -49,9 +53,13 @@ func GetRunningInstances() ([]Instance, error) {
 		}
 	}
 
-	// Cleanup stale labels
+	// Cleanup stale labels and instance tracking
 	if len(pids) > 0 {
 		label_manager.CleanupStaleLabels(pids)
+		instance_account_tracker.CleanupStaleInstances(pids)
+	} else {
+		// No instances running - clean up all tracking
+		instance_account_tracker.CleanupStaleInstances([]int{})
 	}
 
 	return instances, nil
@@ -68,7 +76,10 @@ func GetInstanceCount() (int, error) {
 
 // CloseInstance closes a specific Roblox instance by PID
 func CloseInstance(pid int) error {
-	// Remove label when closing
+	// Remove label and account tracking when closing
 	label_manager.DeleteLabel(pid)
-	return ps_darwin.KillProcess(pid)
+	instance_account_tracker.UntrackInstance(pid)
+
+	// Use forceful kill
+	return ps_darwin.ForceKillProcess(pid)
 }

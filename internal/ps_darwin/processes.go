@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -45,6 +46,21 @@ func findProcess(pid int) (Process, error) {
 
 func killProcess(pid int) error {
 	return syscall.Kill(pid, syscall.SIGTERM)
+}
+
+func forceKillProcess(pid int) error {
+	// First try SIGTERM
+	syscall.Kill(pid, syscall.SIGTERM)
+
+	// Give it 500ms to terminate gracefully
+	time.Sleep(500 * time.Millisecond)
+
+	// Check if still running, if so use SIGKILL
+	if proc, _ := findProcess(pid); proc != nil {
+		return syscall.Kill(pid, syscall.SIGKILL)
+	}
+
+	return nil
 }
 
 func processes() ([]Process, error) {

@@ -43,3 +43,8 @@ func FindProcess(pid int) (Process, error) {
 func KillProcess(pid int) error {
 	return killProcess(pid)
 }
+
+// ForceKillProcess forcefully kills a process, using SIGKILL if SIGTERM doesn't work.
+func ForceKillProcess(pid int) error {
+	return forceKillProcess(pid)
+}
