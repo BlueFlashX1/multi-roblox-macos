@@ -931,7 +931,7 @@ func createAboutTab(window fyne.Window) fyne.CanvasObject {
 	title.TextStyle = fyne.TextStyle{Bold: true}
 	title.Alignment = fyne.TextAlignCenter
 
-	version := widget.NewLabel("Version 3.0.0")
+	version := widget.NewLabel("Version 3.1.0")
 	version.Alignment = fyne.TextAlignCenter
 
 	description := widget.NewLabel(`Run multiple Roblox accounts simultaneously on macOS!
@@ -1519,26 +1519,21 @@ func showAccountSelectionDialog(window fyne.Window, launchCallback func()) {
 			// Check cookie status
 			result := cookie_manager.ValidateCookieForAccount(account.ID)
 			if result.Status == cookie_manager.CookieStatusValid {
-				// Use cookie/auth ticket for instant launch
+				// Get the cookie for this account
 				cookie, err := cookie_manager.GetCookieForAccount(account.ID)
 				if err != nil {
 					dialog.ShowError(fmt.Errorf("Failed to get cookie: %v", err), window)
 					return
 				}
 
-				// Get auth ticket
-				authTicket, err := cookie_manager.GetAuthTicket(cookie.Value)
-				if err != nil {
-					dialog.ShowError(fmt.Errorf("Failed to get auth ticket: %v\n\nCookie may have expired. Recapture in Accounts tab.", err), window)
-					return
+				// Write cookie to Roblox's storage before launching
+				if err := cookie_manager.SetRobloxAppCookie(cookie.Value); err != nil {
+					logger.LogError("Failed to set Roblox app cookie: %v", err)
+					// Continue anyway - might still work
 				}
 
-				// Create a dummy preset to launch with
-				dummyPreset := preset_manager.Preset{
-					Name:    "New Instance",
-					PlaceID: 0, // Will open Roblox home
-				}
-				pid, err := preset_manager.LaunchPresetWithTicket(dummyPreset, authTicket)
+				// Launch Roblox home with multi-instance support
+				pid, err := preset_manager.LaunchRobloxHomeWithAccount(cookie.Value)
 				if err != nil {
 					dialog.ShowError(fmt.Errorf("Failed to launch: %v", err), window)
 					return
@@ -1554,7 +1549,7 @@ func showAccountSelectionDialog(window fyne.Window, launchCallback func()) {
 				launchCallback()
 
 				dialog.ShowInformation("Instance Launched",
-					fmt.Sprintf("Launching new instance as %s!\n\nNote: Opens Roblox home. Use Presets tab for specific games.", account.Username),
+					fmt.Sprintf("Launched Roblox home as %s!\n\nThe app will open to the home screen.", account.Username),
 					window)
 			} else if result.Status == cookie_manager.CookieStatusExpired {
 				dialog.ShowError(fmt.Errorf("Cookie for %s has expired!\n\nGo to Accounts tab and click 'Recapture' to refresh it.", account.Username), window)
@@ -1777,18 +1772,12 @@ func showAccountSelectionForPreset(window fyne.Window, preset preset_manager.Pre
 							exec.Command("pkill", "-x", "Vivaldi").Run()
 							time.Sleep(500 * time.Millisecond)
 
-							// Full account switch: Clear cache + Set cookie + Get auth ticket
-							logger.LogInfo("Full account switch to: %s", account.Username)
+							// Get auth ticket for the selected account
+							// Note: We don't clear Roblox cache anymore - auth ticket is independent
+							// This allows multi-instance to work properly without closing other windows
+							logger.LogInfo("Getting auth ticket for: %s", account.Username)
 
-							// Step 1: Clear ALL Roblox cached data
-							cookie_manager.ClearRobloxAppCookies()
-
-							// Step 2: Write cookie to Roblox storage
-							if err := cookie_manager.SetRobloxAppCookie(cookie.Value); err != nil {
-								logger.LogError("Failed to set Roblox app cookie: %v", err)
-							}
-
-							// Step 3: Get auth ticket
+							// Get auth ticket directly from cookie (no cache clearing needed)
 							authTicket, err := cookie_manager.GetAuthTicket(cookie.Value)
 							if err != nil {
 								logger.LogError("Failed to get auth ticket: %v", err)
@@ -1886,18 +1875,12 @@ func showAccountSelectionForPreset(window fyne.Window, preset preset_manager.Pre
 						}
 					}, window)
 			} else {
-				// Vivaldi not running - Full account switch
-				logger.LogInfo("Full account switch to: %s", account.Username)
+				// Vivaldi not running - get auth ticket directly
+				// Note: Auth ticket is independent, no cache clearing needed
+				// This allows multi-instance to work properly
+				logger.LogInfo("Getting auth ticket for: %s", account.Username)
 
-				// Step 1: Clear ALL Roblox cached data
-				cookie_manager.ClearRobloxAppCookies()
-
-				// Step 2: Write cookie to Roblox storage
-				if err := cookie_manager.SetRobloxAppCookie(cookie.Value); err != nil {
-					logger.LogError("Failed to set Roblox app cookie: %v", err)
-				}
-
-				// Step 3: Get auth ticket
+				// Get auth ticket directly from cookie
 				authTicket, err := cookie_manager.GetAuthTicket(cookie.Value)
 				if err != nil {
 					logger.LogError("Failed to get auth ticket: %v", err)

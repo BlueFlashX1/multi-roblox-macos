@@ -375,3 +375,39 @@ func LaunchPresetWithTicket(preset Preset, authTicket string) (int, error) {
 	// For open command, we can't easily get the PID
 	return 0, nil
 }
+
+// LaunchRobloxHomeWithAccount launches Roblox home screen with a specific account
+// using multi-instance support (copies app if Roblox is already running)
+// Returns the PID of the launched process
+func LaunchRobloxHomeWithAccount(cookie string) (int, error) {
+	logger.LogInfo("LaunchRobloxHomeWithAccount called")
+
+	// Determine which Roblox app to use
+	robloxApp := "/Applications/Roblox.app/Contents/MacOS/RobloxPlayer"
+
+	// Check if Roblox is already running - need to use copied app for multi-instance
+	if isRobloxRunning() {
+		copyPath := getNextRobloxCopyPath()
+		if err := copyRobloxApp(copyPath); err != nil {
+			logger.LogError("Failed to copy Roblox for multi-instance: %v", err)
+			// Fall through to use main app anyway
+		} else {
+			robloxApp = filepath.Join(copyPath, "Contents", "MacOS", "RobloxPlayer")
+			logger.LogInfo("Using copied app for multi-instance: %s", robloxApp)
+		}
+	}
+
+	// Launch Roblox directly without a game URL - it will open to home screen
+	// The app will use whatever credentials are stored
+	logger.LogInfo("Launching Roblox home: %s", robloxApp)
+	cmd := exec.Command(robloxApp)
+	err := cmd.Start()
+	if err != nil {
+		logger.LogError("Failed to launch Roblox home: %v", err)
+		return 0, err
+	}
+
+	pid := cmd.Process.Pid
+	logger.LogInfo("Roblox home launched successfully, PID: %d", pid)
+	return pid, nil
+}
