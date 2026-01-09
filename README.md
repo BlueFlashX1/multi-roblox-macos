@@ -8,6 +8,12 @@
 
 Run multiple Roblox instances simultaneously on macOS with full account management.
 
+<p align="center">
+  <a href="https://github.com/BlueFlashX1/multi-roblox-macos/releases/latest">
+    <img src="https://img.shields.io/badge/Download-Latest%20Release-brightgreen?style=for-the-badge&logo=apple" alt="Download" />
+  </a>
+</p>
+
 ---
 
 ## My Contributions
