@@ -1,0 +1,13 @@
+# Build artifacts
+multi_roblox_macos
+multi_roblox_manager
+*.dmg
+Multi Roblox Manager.app/
+
+# macOS
+.DS_Store
+*/.DS_Store
+
+# IDE
+.idea/
+.vscode/
