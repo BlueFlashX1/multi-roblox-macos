@@ -30,9 +30,49 @@ Run multiple Roblox instances with full account management.
 
 ## Installation
 
+### Step 1: Install Python (Required for Cookie Capture)
+
+The app uses Python to read your browser cookies. If you don't have Python installed:
+
+**Option A: Homebrew (Recommended)**
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+brew install python
+```
+
+**Option B: Download from [python.org/downloads](https://www.python.org/downloads/)**
+
+Verify with: `python3 --version`
+
+### Step 2: Install Required Python Modules
+
+```bash
+python3 -m pip install --upgrade pip
+python3 -m pip install browser-cookie3 lz4 pycryptodomex
+```
+
+<details>
+<summary><strong>Troubleshooting</strong></summary>
+
+**pip not found:**
+```bash
+python3 -m ensurepip --upgrade
+python3 -m pip install browser-cookie3 lz4 pycryptodomex
+```
+
+**Cookie errors with Chrome/Vivaldi 130+:**
+```bash
+pip install --force-reinstall git+https://github.com/borisbabic/browser_cookie3.git@refs/pull/215/head
+```
+
+</details>
+
+### Step 3: Download & Install
+
 1. Download from [Releases](https://github.com/BlueFlashX1/multi-roblox-macos/releases/latest)
-2. Run in Terminal: `xattr -c /path/to/Multi\ Roblox\ Manager.app`
-3. Launch the app
+2. Drag to `/Applications`
+3. Run in Terminal: `xattr -c '/Applications/Multi Roblox Manager.app'`
+4. Launch the app
 
 ---
 
