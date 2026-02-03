@@ -35,6 +35,7 @@ Run multiple Roblox instances with full account management.
 The app uses Python to read your browser cookies. If you don't have Python installed:
 
 **Option A: Homebrew (Recommended)**
+
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 brew install python
@@ -47,6 +48,10 @@ Verify with: `python3 --version`
 ### Step 2: Install Required Python Modules
 
 ```bash
+# Ensure pip is available (safe to run even if already installed)
+python3 -m ensurepip --upgrade
+
+# Upgrade pip and install required modules
 python3 -m pip install --upgrade pip
 python3 -m pip install browser-cookie3 lz4 pycryptodomex
 ```
@@ -54,13 +59,14 @@ python3 -m pip install browser-cookie3 lz4 pycryptodomex
 <details>
 <summary><strong>Troubleshooting</strong></summary>
 
-**pip not found:**
+**Permission denied errors:**
+
 ```bash
-python3 -m ensurepip --upgrade
-python3 -m pip install browser-cookie3 lz4 pycryptodomex
+python3 -m pip install --user browser-cookie3 lz4 pycryptodomex
 ```
 
 **Cookie errors with Chrome/Vivaldi 130+:**
+
 ```bash
 pip install --force-reinstall git+https://github.com/borisbabic/browser_cookie3.git@refs/pull/215/head
 ```
