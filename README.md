@@ -7,6 +7,12 @@
 
 Run multiple Roblox instances with full account management.
 
+## ⚠️ Vivaldi Browser Required
+
+**Cookie capture currently only works with [Vivaldi browser](https://vivaldi.com/download/).**
+
+I forked this project because the original wasn't working reliably, and enhanced it to work with Vivaldi (my default browser). If this repo gains wider attention, I may expand support to other browsers (Chrome, Firefox, Safari, Arc) for cookie capture—enabling quick account switching without needing to re-login.
+
 <p align="center">
   <a href="https://github.com/BlueFlashX1/multi-roblox-macos/releases/latest">
     <img src="https://img.shields.io/badge/Download-Latest%20Release-brightgreen?style=for-the-badge&logo=apple" alt="Download" />
@@ -19,7 +25,7 @@ Run multiple Roblox instances with full account management.
 
 | Feature              | Description                                     |
 | -------------------- | ----------------------------------------------- |
-| **Account Switcher** | Switch accounts with macOS Keychain integration |
+| **Account Switcher** | Switch accounts via Vivaldi cookie capture + macOS Keychain |
 | **Friends Manager**  | View and manage friends across accounts         |
 | **Instance Tracker** | See which account runs in each instance         |
 | **Resource Monitor** | CPU/memory usage per instance                   |
@@ -30,9 +36,15 @@ Run multiple Roblox instances with full account management.
 
 ## Installation
 
-### Step 1: Install Python (Required for Cookie Capture)
+### Step 1: Install Vivaldi Browser (Required)
 
-The app uses Python to read your browser cookies. If you don't have Python installed:
+Cookie capture only works with Vivaldi. Other browsers are not currently supported.
+
+[Download Vivaldi](https://vivaldi.com/download/)
+
+### Step 2: Install Python (Required for Cookie Capture)
+
+The app uses Python to read Vivaldi's cookies. If you don't have Python installed:
 
 **Option A: Homebrew (Recommended)**
 
@@ -45,7 +57,7 @@ brew install python
 
 Verify with: `python3 --version`
 
-### Step 2: Install Required Python Modules
+### Step 3: Install Required Python Modules
 
 ```bash
 # Ensure pip is available (safe to run even if already installed)
@@ -73,7 +85,7 @@ pip install --force-reinstall git+https://github.com/borisbabic/browser_cookie3.
 
 </details>
 
-### Step 3: Download & Install
+### Step 4: Download & Install
 
 1. Download from [Releases](https://github.com/BlueFlashX1/multi-roblox-macos/releases/latest)
 2. Drag to `/Applications`
@@ -97,8 +109,8 @@ fyne package -os darwin -icon ./resources/app_icon.png
 
 | Platform                 | Status         |
 | ------------------------ | -------------- |
-| Apple Silicon (M1/M2/M3) | ✅ Works       |
-| Intel Mac                | ✅ Should work |
+| Apple Silicon (M1/M2/M3/M4) | ✅ Works       |
+| Intel Mac                | ⚠️ Untested    |
 
 ---
 
