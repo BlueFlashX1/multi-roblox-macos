@@ -39,6 +39,72 @@ func GetVivaldiCookiePath() (string, error) {
 	return cookiePath, nil
 }
 
+// runPythonWithAutoInstall runs a Python script and auto-installs missing packages
+// It tries multiple Python paths to find one that works
+func runPythonWithAutoInstall(script string, requiredPackages []string) ([]byte, error) {
+	// Try multiple Python paths in order of preference
+	pythonPaths := []string{
+		"/usr/local/bin/python3",
+		"/usr/bin/python3",
+		"python3",
+	}
+
+	var lastErr error
+	var lastOutput []byte
+
+	for _, pythonPath := range pythonPaths {
+		// First, try running the script directly
+		cmd := exec.Command(pythonPath, "-c", script)
+		output, err := cmd.CombinedOutput()
+
+		if err == nil {
+			return output, nil
+		}
+
+		outputStr := string(output)
+		lastOutput = output
+		lastErr = err
+
+		// Check if it's a missing module error
+		if strings.Contains(outputStr, "ModuleNotFoundError") || strings.Contains(outputStr, "No module named") {
+			logger.LogInfo("Missing Python package detected, attempting auto-install...")
+
+			// Install all required packages
+			for _, pkg := range requiredPackages {
+				logger.LogInfo("Auto-installing Python package: %s using %s", pkg, pythonPath)
+
+				// Try pip install with --user flag for user-level install
+				installCmd := exec.Command(pythonPath, "-m", "pip", "install", "--user", "--quiet", pkg)
+				installOutput, installErr := installCmd.CombinedOutput()
+
+				if installErr != nil {
+					logger.LogError("Failed to install %s: %v, output: %s", pkg, installErr, string(installOutput))
+					// Try without --user flag
+					installCmd = exec.Command(pythonPath, "-m", "pip", "install", "--quiet", pkg)
+					installOutput, installErr = installCmd.CombinedOutput()
+					if installErr != nil {
+						logger.LogError("Retry without --user also failed: %v", installErr)
+					}
+				} else {
+					logger.LogInfo("Successfully installed %s", pkg)
+				}
+			}
+
+			// Retry the script after installing
+			cmd = exec.Command(pythonPath, "-c", script)
+			output, err = cmd.CombinedOutput()
+			if err == nil {
+				logger.LogInfo("Script succeeded after auto-installing packages")
+				return output, nil
+			}
+			lastOutput = output
+			lastErr = err
+		}
+	}
+
+	return lastOutput, fmt.Errorf("all Python paths failed: %w", lastErr)
+}
+
 // GetCurrentRobloxCookie reads the current .ROBLOSECURITY cookie from Vivaldi using browser_cookie3
 func GetCurrentRobloxCookie() (*RobloxCookie, error) {
 	logger.LogInfo("Reading .ROBLOSECURITY cookie from Vivaldi using browser_cookie3")
@@ -63,8 +129,10 @@ except Exception as e:
     print(json.dumps({"error": str(e)}))
 `
 
-	cmd := exec.Command("python3", "-c", pythonScript)
-	output, err := cmd.CombinedOutput()
+	// Required packages for cookie reading
+	requiredPackages := []string{"browser_cookie3", "pycryptodomex", "lz4"}
+
+	output, err := runPythonWithAutoInstall(pythonScript, requiredPackages)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read cookie: %w, output: %s", err, string(output))
 	}

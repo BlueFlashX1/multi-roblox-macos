@@ -1,6 +1,8 @@
 package account_manager
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"insadem/multi_roblox_macos/internal/logger"
@@ -8,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Account represents a Roblox account
@@ -68,6 +71,15 @@ func SaveAccounts(accounts []Account) error {
 	return os.WriteFile(path, data, 0600)
 }
 
+// generateUniqueID creates a unique account ID using timestamp + random bytes
+func generateUniqueID() string {
+	// Use timestamp (milliseconds) + 4 random bytes for uniqueness
+	timestamp := time.Now().UnixMilli()
+	randomBytes := make([]byte, 4)
+	rand.Read(randomBytes)
+	return fmt.Sprintf("acc_%d_%s", timestamp, hex.EncodeToString(randomBytes))
+}
+
 // AddAccount adds a new account with secure password storage
 func AddAccount(username, password, label string) error {
 	logger.LogInfo("AddAccount called for username: %s, label: %s", username, label)
@@ -78,8 +90,16 @@ func AddAccount(username, password, label string) error {
 		return err
 	}
 
-	// Generate unique ID
-	id := fmt.Sprintf("account_%d", len(accounts)+1)
+	// Check if account with same username already exists
+	for _, acc := range accounts {
+		if strings.EqualFold(acc.Username, username) {
+			logger.LogInfo("Account with username %s already exists (ID: %s)", username, acc.ID)
+			return fmt.Errorf("account with username '%s' already exists", username)
+		}
+	}
+
+	// Generate truly unique ID (timestamp + random bytes)
+	id := generateUniqueID()
 	logger.LogDebug("Generated account ID: %s", id)
 
 	// Store password in macOS Keychain
