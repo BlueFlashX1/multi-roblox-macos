@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -89,22 +90,38 @@ func runPythonWithAutoInstall(script string, requiredPackages []string) ([]byte,
 
 			// Announce what we are about to install so the user can abort (Ctrl-C).
 			// This is the consent notice before touching their Python environment.
+			// Sort keys for deterministic output — map iteration order is random,
+			// producing unstable log output and making log diffs harder to read.
 			var pinned []string
-			for _, pkg := range requiredPackages {
-				if spec, ok := pinnedPackages[pkg]; ok {
-					pinned = append(pinned, spec)
-				} else {
-					pinned = append(pinned, pkg)
+			sortedPkgs := make([]string, len(requiredPackages))
+			copy(sortedPkgs, requiredPackages)
+			sort.Strings(sortedPkgs)
+			for _, pkg := range sortedPkgs {
+				spec, ok := pinnedPackages[pkg]
+				if !ok {
+					// Guard: refuse to proceed with an unpinned package. A caller that
+					// adds a new required package without updating pinnedPackages would
+					// silently re-open the supply-chain attack surface this map closes.
+					return nil, fmt.Errorf("refusing to install unpinned package %q — add to pinnedPackages map first", pkg)
 				}
+				pinned = append(pinned, spec)
 			}
-			fmt.Fprintf(os.Stderr, "[multi-roblox] About to pip-install (--user): %s. Press Ctrl-C to abort.\n",
+			consentMsg := fmt.Sprintf("[multi-roblox] About to pip-install (--user): %s. Press Ctrl-C to abort.",
 				strings.Join(pinned, ", "))
+			fmt.Fprintln(os.Stderr, consentMsg)
+			// Also log to the rotating log file — users who launched via Finder/Spotlight
+			// have no terminal, so stderr is silently discarded. The log file is always
+			// written regardless of launch method.
+			logger.LogInfo("%s", consentMsg)
 
 			// Install all required packages at pinned versions, --user only.
 			for _, pkg := range requiredPackages {
 				spec, ok := pinnedPackages[pkg]
 				if !ok {
-					spec = pkg // fall back to unpinned name if not in our map
+					// This branch is unreachable after the guard above, but kept for
+					// defensive completeness — it ensures the loop can never fall through
+					// to an unpinned install even if the guard logic is refactored.
+					return nil, fmt.Errorf("refusing to install unpinned package %q — add to pinnedPackages map first", pkg)
 				}
 
 				logger.LogInfo("Auto-installing Python package: %s using %s", spec, pythonPath)
