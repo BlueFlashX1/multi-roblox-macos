@@ -1,8 +1,9 @@
-# Build artifacts
-multi_roblox_macos
-multi_roblox_manager
-*.dmg
-Multi Roblox Manager.app/
+# Build artifacts — release via GitHub Releases, not git tree
+/multi_roblox_manager
+/multi_roblox_macos
+/*.dmg
+/*.pkg
+/Multi Roblox Manager.app/
 
 # macOS
 .DS_Store
