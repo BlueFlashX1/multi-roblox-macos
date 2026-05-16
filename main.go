@@ -31,6 +31,7 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 )
@@ -121,11 +122,18 @@ func main() {
 }
 
 func createInstancesTab(window fyne.Window, ctx context.Context) fyne.CanvasObject {
-	// Instance counter and system stats labels
-	counterLabel := widget.NewLabel("Running Instances: 0")
+	// Instance counter and system stats labels.
+	// Use data/binding.String so that goroutine writes via binding.Set() are
+	// dispatched safely to the Fyne main thread — widget.Label.SetText is not
+	// documented goroutine-safe in Fyne v2.4.x.
+	counterBinding := binding.NewString()
+	counterBinding.Set("Running Instances: 0") //nolint:errcheck — initial value always valid
+	counterLabel := widget.NewLabelWithData(counterBinding)
 	counterLabel.TextStyle = fyne.TextStyle{Bold: true}
 
-	systemStatsLabel := widget.NewLabel("System: CPU 0% | Memory 0 MB / 0 MB")
+	statsBinding := binding.NewString()
+	statsBinding.Set("System: CPU 0% | Memory 0 MB / 0 MB") //nolint:errcheck
+	systemStatsLabel := widget.NewLabelWithData(statsBinding)
 
 	// instancesMu guards currentInstances, which is written by the background
 	// goroutine and read by the list Length/UpdateItem callbacks on the main thread.
@@ -136,10 +144,11 @@ func createInstancesTab(window fyne.Window, ctx context.Context) fyne.CanvasObje
 	var instanceList *widget.List
 
 	// updateInstances fetches fresh data, stores it under the mutex, then
-	// triggers a repaint. This function may be called from any goroutine;
-	// all Fyne widget mutations (SetText, Refresh) are either goroutine-safe
-	// in v2.4.x or happen inside UpdateItem which is invoked by the renderer
-	// on the main thread.
+	// triggers a repaint. This function may be called from any goroutine.
+	// Label text is written via binding.Set() which is goroutine-safe and
+	// dispatches the UI update to the Fyne main thread internally.
+	// instanceList.Refresh() is safe to call from any goroutine in Fyne v2.4.x
+	// because it only queues a repaint; UpdateItem runs on the render thread.
 	var updateInstances func()
 	updateInstances = func() {
 		instances, err := instance_manager.GetRunningInstances()
@@ -151,12 +160,12 @@ func createInstancesTab(window fyne.Window, ctx context.Context) fyne.CanvasObje
 		currentInstances = instances
 		instancesMu.Unlock()
 
-		counterLabel.SetText(fmt.Sprintf("Running Instances: %d", len(instances)))
+		counterBinding.Set(fmt.Sprintf("Running Instances: %d", len(instances))) //nolint:errcheck
 
 		// Update system stats
 		cpuPercent, memUsed, memTotal, err := resource_monitor.GetSystemStats()
 		if err == nil {
-			systemStatsLabel.SetText(fmt.Sprintf("System: CPU %.1f%% | Memory %s / %s",
+			statsBinding.Set(fmt.Sprintf("System: CPU %.1f%% | Memory %s / %s", //nolint:errcheck
 				cpuPercent,
 				resource_monitor.FormatMemory(memUsed),
 				resource_monitor.FormatMemory(memTotal)))
