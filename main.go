@@ -1618,16 +1618,15 @@ func showAccountSelectionDialog(window fyne.Window, launchCallback func()) {
 			statusBindings[i].Set(newText) //nolint:errcheck
 
 			// Rebuild options slice and update Select widget.
-			// This may race if two goroutines finish simultaneously, but
-			// SetOptions is safe to call from any goroutine in Fyne v2.
+			// SetOptions is the goroutine-safe accessor in Fyne v2;
+			// direct field assignment (selectWidget.Options = ...) is not.
 			updatedOpts := make([]string, len(accounts)+1)
 			updatedOpts[0] = "Launch without account (opens Roblox home)"
 			for j := range accounts {
 				v, _ := statusBindings[j].Get()
 				updatedOpts[j+1] = v
 			}
-			selectWidget.Options = updatedOpts
-			selectWidget.Refresh()
+			selectWidget.SetOptions(updatedOpts)
 		}()
 	}
 
