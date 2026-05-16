@@ -1028,8 +1028,24 @@ class BinaryCookieWriter:
         file_data += page_data
         file_data += struct.pack('>I', 0)
 
-        with open(filepath, 'wb') as f:
-            f.write(file_data)
+        # O_NOFOLLOW closes the TOCTOU window between Go's lstat check and
+        # this write. If the path was swapped to a symlink in the gap,
+        # os.open() raises OSError(ELOOP) and we fail closed rather than
+        # clobbering the symlink target.
+        import errno
+        try:
+            fd = os.open(filepath,
+                         os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+                         0o600)
+        except OSError as e:
+            if e.errno == errno.ELOOP:
+                raise SystemExit("refused to write through symlink: " + filepath)
+            raise
+        try:
+            with os.fdopen(fd, 'wb') as f:
+                f.write(file_data)
+        except Exception:
+            raise
 
         return True
 
