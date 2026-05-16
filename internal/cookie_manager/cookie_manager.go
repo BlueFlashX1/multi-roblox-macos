@@ -1,6 +1,7 @@
 package cookie_manager
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -194,7 +195,8 @@ except Exception as e:
 
 	output, err := runPythonWithAutoInstall(pythonScript, requiredPackages)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read cookie: %w, output: %s", err, string(output))
+		sum := sha256.Sum256(output)
+		return nil, fmt.Errorf("failed to read cookie: %w (output len=%d sha8=%x)", err, len(output), sum[:4])
 	}
 
 	// Parse JSON result using a typed struct to avoid runtime panics from bad
@@ -205,7 +207,8 @@ except Exception as e:
 		Error   string  `json:"error"`
 	}
 	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse cookie result: %w, output: %s", err, string(output))
+		sum := sha256.Sum256(output)
+		return nil, fmt.Errorf("failed to parse cookie result: %w (output len=%d sha8=%x)", err, len(output), sum[:4])
 	}
 
 	if result.Error != "" {
@@ -708,7 +711,8 @@ except Exception as e:
 		Error  string `json:"error"`
 	}
 	if err := json.Unmarshal(output, &result); err != nil {
-		return "", fmt.Errorf("failed to parse auth ticket response: %s", string(output))
+		sum := sha256.Sum256(output)
+		return "", fmt.Errorf("failed to parse auth ticket response (output len=%d sha8=%x)", len(output), sum[:4])
 	}
 
 	if result.Error != "" {
@@ -761,7 +765,8 @@ except Exception as e:
 		Error    string `json:"error"`
 	}
 	if err := json.Unmarshal(output, &result); err != nil {
-		return "", fmt.Errorf("failed to parse response: %s", string(output))
+		sum := sha256.Sum256(output)
+		return "", fmt.Errorf("failed to parse response (output len=%d sha8=%x)", len(output), sum[:4])
 	}
 
 	if result.Error != "" {
@@ -1049,7 +1054,8 @@ print("SUCCESS")
 	cmd.Env = append(os.Environ(), "MRM_ROBLOX_COOKIE="+cookieValue)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to write binarycookies: %w, output: %s", err, string(output))
+		sum := sha256.Sum256(output)
+		return fmt.Errorf("failed to write binarycookies: %w (output len=%d sha8=%x)", err, len(output), sum[:4])
 	}
 
 	result := strings.TrimSpace(string(output))
