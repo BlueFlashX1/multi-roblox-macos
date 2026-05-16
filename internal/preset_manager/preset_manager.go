@@ -3,9 +3,11 @@ package preset_manager
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"insadem/multi_roblox_macos/internal/logger"
 	"insadem/multi_roblox_macos/internal/roblox_api"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,12 +55,16 @@ func LoadPresets() ([]Preset, error) {
 		return nil, err
 	}
 
-	// If file doesn't exist, return empty list
+	// If file doesn't exist, return empty list (fresh install — not an error).
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		return []Preset{}, nil
 	}
 
 	data, err := os.ReadFile(configPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		// Stat passed but file was removed in the gap — treat as empty state.
+		return []Preset{}, nil
+	}
 	if err != nil {
 		return nil, err
 	}

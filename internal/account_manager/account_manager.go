@@ -4,8 +4,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"insadem/multi_roblox_macos/internal/logger"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,12 +51,16 @@ func LoadAccounts() ([]Account, error) {
 		return nil, err
 	}
 
-	// If file doesn't exist, return empty list
+	// If file doesn't exist, return empty list (fresh install — not an error).
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return []Account{}, nil
 	}
 
 	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		// Stat passed but file was removed in the gap — treat as empty state.
+		return []Account{}, nil
+	}
 	if err != nil {
 		return nil, err
 	}

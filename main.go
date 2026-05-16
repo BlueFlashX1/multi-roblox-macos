@@ -140,9 +140,10 @@ func createInstancesTab(window fyne.Window, ctx context.Context) fyne.CanvasObje
 	// goroutine and read by the list Length/UpdateItem callbacks on the main thread.
 	var instancesMu sync.RWMutex
 	var currentInstances []instance_manager.Instance
-	// instanceList is declared here so updateInstances can reference it via closure
-	// before the widget.NewList call below.
+	// instanceList and closeAllButton are declared here so updateInstances can
+	// reference them via closure before the widget construction below.
 	var instanceList *widget.List
+	var closeAllButton *widget.Button
 
 	// updateInstances fetches fresh data, stores it under the mutex, then
 	// triggers a repaint. This function may be called from any goroutine.
@@ -173,6 +174,15 @@ func createInstancesTab(window fyne.Window, ctx context.Context) fyne.CanvasObje
 		}
 
 		instanceList.Refresh()
+
+		// Keep Close All enabled only when there is something to close.
+		if closeAllButton != nil {
+			if len(instances) == 0 {
+				closeAllButton.Disable()
+			} else {
+				closeAllButton.Enable()
+			}
+		}
 	}
 
 	// Instance list — Length and UpdateItem read currentInstances under the read lock.
@@ -312,7 +322,7 @@ func createInstancesTab(window fyne.Window, ctx context.Context) fyne.CanvasObje
 		})
 	})
 
-	closeAllButton := widget.NewButtonWithIcon("Close All", resourceMopPng, func() {
+	closeAllButton = widget.NewButtonWithIcon("Close All", resourceMopPng, func() {
 		instancesMu.RLock()
 		count := len(currentInstances)
 		instancesMu.RUnlock()
