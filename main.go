@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"image/color"
 	"insadem/multi_roblox_macos/internal/account_manager"
@@ -49,6 +50,9 @@ func main() {
 	// Cleanup old /tmp Roblox copies on startup
 	cookie_manager.CleanupTempRobloxCopies()
 
+	// Context scoped to window lifetime; cancel() is called on window close.
+	ctx, cancel := context.WithCancel(context.Background())
+
 	// Auto-refresh expired cookies on startup and periodically
 	go func() {
 		refreshCookies := func() {
@@ -77,9 +81,15 @@ func main() {
 
 		// Periodic refresh every 30 minutes
 		ticker := time.NewTicker(30 * time.Minute)
-		for range ticker.C {
-			logger.LogInfo("Periodic cookie refresh check...")
-			refreshCookies()
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				logger.LogInfo("Periodic cookie refresh check...")
+				refreshCookies()
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
@@ -89,7 +99,7 @@ func main() {
 
 	// Create tabs
 	tabs := container.NewAppTabs(
-		container.NewTabItem("Instances", createInstancesTab(window)),
+		container.NewTabItem("Instances", createInstancesTab(window, ctx)),
 		container.NewTabItem("Presets", createPresetsTab(window)),
 		container.NewTabItem("Accounts", createAccountsTab(window)),
 		container.NewTabItem("Friends", createFriendsTab(window)),
@@ -100,6 +110,7 @@ func main() {
 
 	// Cleanup on app close
 	window.SetOnClosed(func() {
+		cancel() // stop background goroutines
 		logger.LogInfo("App closing, cleaning up temporary files...")
 		cookie_manager.CleanupTempRobloxCopies()
 		logger.LogInfo("Cleanup complete, goodbye!")
@@ -108,16 +119,59 @@ func main() {
 	window.ShowAndRun()
 }
 
-func createInstancesTab(window fyne.Window) fyne.CanvasObject {
+func createInstancesTab(window fyne.Window, ctx context.Context) fyne.CanvasObject {
 	// Instance counter and system stats labels
 	counterLabel := widget.NewLabel("Running Instances: 0")
 	counterLabel.TextStyle = fyne.TextStyle{Bold: true}
 
 	systemStatsLabel := widget.NewLabel("System: CPU 0% | Memory 0 MB / 0 MB")
 
-	// Instance list with resource stats and labels
-	instanceList := widget.NewList(
-		func() int { return 0 },
+	// instancesMu guards currentInstances, which is written by the background
+	// goroutine and read by the list Length/UpdateItem callbacks on the main thread.
+	var instancesMu sync.RWMutex
+	var currentInstances []instance_manager.Instance
+	// instanceList is declared here so updateInstances can reference it via closure
+	// before the widget.NewList call below.
+	var instanceList *widget.List
+
+	// updateInstances fetches fresh data, stores it under the mutex, then
+	// triggers a repaint. This function may be called from any goroutine;
+	// all Fyne widget mutations (SetText, Refresh) are either goroutine-safe
+	// in v2.4.x or happen inside UpdateItem which is invoked by the renderer
+	// on the main thread.
+	var updateInstances func()
+	updateInstances = func() {
+		instances, err := instance_manager.GetRunningInstances()
+		if err != nil {
+			return
+		}
+
+		instancesMu.Lock()
+		currentInstances = instances
+		instancesMu.Unlock()
+
+		counterLabel.SetText(fmt.Sprintf("Running Instances: %d", len(instances)))
+
+		// Update system stats
+		cpuPercent, memUsed, memTotal, err := resource_monitor.GetSystemStats()
+		if err == nil {
+			systemStatsLabel.SetText(fmt.Sprintf("System: CPU %.1f%% | Memory %s / %s",
+				cpuPercent,
+				resource_monitor.FormatMemory(memUsed),
+				resource_monitor.FormatMemory(memTotal)))
+		}
+
+		instanceList.Refresh()
+	}
+
+	// Instance list — Length and UpdateItem read currentInstances under the read lock.
+	// They are always called from the rendering/main goroutine by the Fyne renderer.
+	instanceList = widget.NewList(
+		func() int {
+			instancesMu.RLock()
+			defer instancesMu.RUnlock()
+			return len(currentInstances)
+		},
 		func() fyne.CanvasObject {
 			colorIndicator := canvas.NewRectangle(color.Transparent)
 			colorIndicator.SetMinSize(fyne.NewSize(4, 40))
@@ -135,41 +189,15 @@ func createInstancesTab(window fyne.Window) fyne.CanvasObject {
 				),
 			)
 		},
-		func(id widget.ListItemID, obj fyne.CanvasObject) {},
-	)
-
-	var currentInstances []instance_manager.Instance
-	var updateInstances func()
-
-	// Update instance list function
-	updateInstances = func() {
-		instances, err := instance_manager.GetRunningInstances()
-		if err != nil {
-			return
-		}
-
-		currentInstances = instances
-		counterLabel.SetText(fmt.Sprintf("Running Instances: %d", len(instances)))
-
-		// Update system stats
-		cpuPercent, memUsed, memTotal, err := resource_monitor.GetSystemStats()
-		if err == nil {
-			systemStatsLabel.SetText(fmt.Sprintf("System: CPU %.1f%% | Memory %s / %s",
-				cpuPercent,
-				resource_monitor.FormatMemory(memUsed),
-				resource_monitor.FormatMemory(memTotal)))
-		}
-
-		instanceList.Length = func() int {
-			return len(currentInstances)
-		}
-
-		instanceList.UpdateItem = func(id widget.ListItemID, obj fyne.CanvasObject) {
+		func(id widget.ListItemID, obj fyne.CanvasObject) {
+			instancesMu.RLock()
 			if id >= len(currentInstances) {
+				instancesMu.RUnlock()
 				return
 			}
-
 			instance := currentInstances[id]
+			instancesMu.RUnlock()
+
 			border := obj.(*fyne.Container)
 
 			// BorderLayout NewBorder(top, bottom, left, right, center) stores objects as:
@@ -243,16 +271,22 @@ func createInstancesTab(window fyne.Window) fyne.CanvasObject {
 				instance_manager.CloseInstance(instance.PID)
 				updateInstances()
 			}
-		}
+		},
+	)
 
-		instanceList.Refresh()
-	}
-
-	// Auto-refresh every 2 seconds
+	// Auto-refresh every 2 seconds. The goroutine fetches data and stores it
+	// under instancesMu; instanceList.Refresh() queues a repaint and the
+	// renderer invokes UpdateItem on the main thread.
 	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
 		for {
-			time.Sleep(2 * time.Second)
-			updateInstances()
+			select {
+			case <-ticker.C:
+				updateInstances()
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
