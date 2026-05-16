@@ -1,6 +1,7 @@
 package preset_manager
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"insadem/multi_roblox_macos/internal/logger"
@@ -326,11 +327,10 @@ func LaunchPresetWithTicket(preset Preset, authTicket string) (int, error) {
 		logger.LogDebug("Using original URL (may not launch game): %s", protocolString)
 	}
 
-	if len(protocolString) > 100 {
-		logger.LogDebug("Final protocol string: %s...", protocolString[:100])
-	} else {
-		logger.LogDebug("Final protocol string: %s", protocolString)
-	}
+	// Log only the length and a 4-byte SHA-256 prefix — never the raw string which
+	// contains the live gameinfo:<TICKET> auth credential.
+	sum := sha256.Sum256([]byte(protocolString))
+	logger.LogDebug("Protocol string built (len=%d sha8=%x)", len(protocolString), sum[:4])
 
 	// Check if Roblox is already running - need to use copied app for multi-instance
 	robloxApp := "/Applications/Roblox.app/Contents/MacOS/RobloxPlayer"
