@@ -2,6 +2,7 @@ package instance_account_tracker
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -20,16 +21,23 @@ var (
 	mapping []InstanceAccountMap
 )
 
-// GetMappingPath returns the path to the instance-account mapping file
-func GetMappingPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Library", "Application Support", "multi_roblox_macos", "instance_accounts.json")
+// GetMappingPath returns the path to the instance-account mapping file.
+// Returns an error if the home directory cannot be determined.
+func GetMappingPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("GetMappingPath: failed to get home dir: %w", err)
+	}
+	return filepath.Join(home, "Library", "Application Support", "multi_roblox_macos", "instance_accounts.json"), nil
 }
 
 // loadMappingsLocked reads instance-account mappings from disk.
 // Caller MUST hold mu before calling.
 func loadMappingsLocked() ([]InstanceAccountMap, error) {
-	path := GetMappingPath()
+	path, err := GetMappingPath()
+	if err != nil {
+		return nil, err
+	}
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return []InstanceAccountMap{}, nil
@@ -52,7 +60,10 @@ func loadMappingsLocked() ([]InstanceAccountMap, error) {
 // saveMappingsLocked persists mappings to disk.
 // Caller MUST hold mu before calling.
 func saveMappingsLocked(maps []InstanceAccountMap) error {
-	path := GetMappingPath()
+	path, err := GetMappingPath()
+	if err != nil {
+		return err
+	}
 	dir := filepath.Dir(path)
 
 	if err := os.MkdirAll(dir, 0755); err != nil {

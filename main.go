@@ -336,7 +336,12 @@ func createInstancesTab(window fyne.Window, ctx context.Context) fyne.CanvasObje
 
 func createPresetsTab(window fyne.Window) fyne.CanvasObject {
 	// Load presets
-	presets, _ := preset_manager.LoadPresets()
+	presets, err := preset_manager.LoadPresets()
+	if err != nil {
+		logger.LogError("createPresetsTab: failed to load presets: %v", err)
+		dialog.ShowError(fmt.Errorf("Failed to load presets: %w", err), window)
+		presets = nil
+	}
 	var presetList *widget.List
 
 	// Preset list with card layout
@@ -440,7 +445,11 @@ func createPresetsTab(window fyne.Window) fyne.CanvasObject {
 
 			settingsBtn.OnTapped = func() {
 				showPresetSettingsDialog(window, preset, id, func() {
-					presets, _ = preset_manager.LoadPresets()
+					if updated, loadErr := preset_manager.LoadPresets(); loadErr != nil {
+						logger.LogError("Failed to reload presets after settings: %v", loadErr)
+					} else {
+						presets = updated
+					}
 					presetList.Refresh()
 				})
 			}
@@ -451,7 +460,11 @@ func createPresetsTab(window fyne.Window) fyne.CanvasObject {
 					func(yes bool) {
 						if yes {
 							preset_manager.DeletePreset(id)
-							presets, _ = preset_manager.LoadPresets()
+							if updated, loadErr := preset_manager.LoadPresets(); loadErr != nil {
+								logger.LogError("Failed to reload presets after delete: %v", loadErr)
+							} else {
+								presets = updated
+							}
 							presetList.Refresh()
 						}
 					}, window)
@@ -1061,7 +1074,12 @@ How it works:
 
 func createAccountsTab(window fyne.Window) fyne.CanvasObject {
 	// Load accounts
-	accounts, _ := account_manager.LoadAccounts()
+	accounts, err := account_manager.LoadAccounts()
+	if err != nil {
+		logger.LogError("createAccountsTab: failed to load accounts: %v", err)
+		dialog.ShowError(fmt.Errorf("Failed to load accounts: %w", err), window)
+		accounts = nil
+	}
 	var accountList *widget.List
 
 	// Detect current logged-in account from Vivaldi cookie
@@ -1209,7 +1227,11 @@ func createAccountsTab(window fyne.Window) fyne.CanvasObject {
 
 			editBtn.OnTapped = func() {
 				showEditAccountDialog(window, account.ID, func() {
-					accounts, _ = account_manager.LoadAccounts()
+					if updated, loadErr := account_manager.LoadAccounts(); loadErr != nil {
+						logger.LogError("Failed to reload accounts after edit: %v", loadErr)
+					} else {
+						accounts = updated
+					}
 					accountList.Refresh()
 				})
 			}
@@ -1224,7 +1246,11 @@ func createAccountsTab(window fyne.Window) fyne.CanvasObject {
 							cacheMutex.Lock()
 							delete(cookieStatusCache, account.ID)
 							cacheMutex.Unlock()
-							accounts, _ = account_manager.LoadAccounts()
+							if updated, loadErr := account_manager.LoadAccounts(); loadErr != nil {
+								logger.LogError("Failed to reload accounts after delete: %v", loadErr)
+							} else {
+								accounts = updated
+							}
 							accountList.Refresh()
 						}
 					}, window)
@@ -1259,7 +1285,11 @@ func createAccountsTab(window fyne.Window) fyne.CanvasObject {
 				if err := account_manager.AddAccount(usernameEntry.Text, password, labelEntry.Text); err != nil {
 					dialog.ShowError(fmt.Errorf("Failed to add account: %w", err), window)
 				} else {
-					accounts, _ = account_manager.LoadAccounts()
+					if updated, loadErr := account_manager.LoadAccounts(); loadErr != nil {
+						logger.LogError("Failed to reload accounts after add: %v", loadErr)
+					} else {
+						accounts = updated
+					}
 					accountList.Refresh()
 				}
 			}

@@ -25,15 +25,23 @@ const (
 	accountsFile    = "accounts.json"
 )
 
-// GetAccountsPath returns the path to the accounts file
-func GetAccountsPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "Library", "Application Support", "multi_roblox_macos", accountsFile)
+// GetAccountsPath returns the path to the accounts file.
+// Returns an error if the home directory cannot be determined — writing to
+// "" would place files at the filesystem root.
+func GetAccountsPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("GetAccountsPath: failed to get home dir: %w", err)
+	}
+	return filepath.Join(home, "Library", "Application Support", "multi_roblox_macos", accountsFile), nil
 }
 
 // LoadAccounts loads all accounts from disk
 func LoadAccounts() ([]Account, error) {
-	path := GetAccountsPath()
+	path, err := GetAccountsPath()
+	if err != nil {
+		return nil, err
+	}
 
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(path)
@@ -61,7 +69,10 @@ func LoadAccounts() ([]Account, error) {
 
 // SaveAccounts saves accounts to disk
 func SaveAccounts(accounts []Account) error {
-	path := GetAccountsPath()
+	path, err := GetAccountsPath()
+	if err != nil {
+		return err
+	}
 
 	data, err := json.MarshalIndent(accounts, "", "  ")
 	if err != nil {
@@ -71,13 +82,18 @@ func SaveAccounts(accounts []Account) error {
 	return os.WriteFile(path, data, 0600)
 }
 
-// generateUniqueID creates a unique account ID using timestamp + random bytes
-func generateUniqueID() string {
+// generateUniqueID creates a unique account ID using timestamp + random bytes.
+// Returns an error if the OS cannot provide cryptographically random bytes
+// (e.g., sandboxed or restricted /dev/urandom) — a silently all-zero ID would
+// cause ID collisions across accounts.
+func generateUniqueID() (string, error) {
 	// Use timestamp (milliseconds) + 4 random bytes for uniqueness
 	timestamp := time.Now().UnixMilli()
 	randomBytes := make([]byte, 4)
-	rand.Read(randomBytes)
-	return fmt.Sprintf("acc_%d_%s", timestamp, hex.EncodeToString(randomBytes))
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "", fmt.Errorf("failed to generate random ID component: %w", err)
+	}
+	return fmt.Sprintf("acc_%d_%s", timestamp, hex.EncodeToString(randomBytes)), nil
 }
 
 // AddAccount adds a new account with secure password storage
@@ -99,7 +115,11 @@ func AddAccount(username, password, label string) error {
 	}
 
 	// Generate truly unique ID (timestamp + random bytes)
-	id := generateUniqueID()
+	id, err := generateUniqueID()
+	if err != nil {
+		logger.LogError("Failed to generate account ID: %v", err)
+		return fmt.Errorf("failed to generate account ID: %w", err)
+	}
 	logger.LogDebug("Generated account ID: %s", id)
 
 	// Store password in macOS Keychain
