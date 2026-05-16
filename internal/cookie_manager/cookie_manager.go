@@ -39,8 +39,26 @@ func GetVivaldiCookiePath() (string, error) {
 	return cookiePath, nil
 }
 
-// runPythonWithAutoInstall runs a Python script and auto-installs missing packages
-// It tries multiple Python paths to find one that works
+// pinnedPackages maps each logical package name to its pinned version specifier.
+// Versions pinned 2026-05-16. Update when a security patch is released upstream.
+//
+// Security rationale: unpinned `pip install` is a supply-chain attack surface —
+// a typosquat or compromise of browser_cookie3 / pycryptodomex would silently
+// install under the user's UID. Pinning to known-good versions limits the blast
+// radius to version-specific vulnerabilities rather than arbitrary malicious code.
+var pinnedPackages = map[string]string{
+	"browser_cookie3": "browser_cookie3==0.19.1",
+	"pycryptodomex":   "pycryptodomex==3.20.0",
+	"lz4":             "lz4==4.3.3",
+}
+
+// runPythonWithAutoInstall runs a Python script and auto-installs missing packages.
+// It tries multiple Python paths to find one that works.
+//
+// Security: packages are installed pinned to known-good versions via --user only.
+// The system-wide fallback (install without --user) has been removed — it polluted
+// other tools' Python environments and could silently escalate privileges. If the
+// --user install fails, the error is surfaced to the caller rather than retried.
 func runPythonWithAutoInstall(script string, requiredPackages []string) ([]byte, error) {
 	// Try multiple Python paths in order of preference
 	pythonPaths := []string{
@@ -69,25 +87,43 @@ func runPythonWithAutoInstall(script string, requiredPackages []string) ([]byte,
 		if strings.Contains(outputStr, "ModuleNotFoundError") || strings.Contains(outputStr, "No module named") {
 			logger.LogInfo("Missing Python package detected, attempting auto-install...")
 
-			// Install all required packages
+			// Announce what we are about to install so the user can abort (Ctrl-C).
+			// This is the consent notice before touching their Python environment.
+			var pinned []string
 			for _, pkg := range requiredPackages {
-				logger.LogInfo("Auto-installing Python package: %s using %s", pkg, pythonPath)
+				if spec, ok := pinnedPackages[pkg]; ok {
+					pinned = append(pinned, spec)
+				} else {
+					pinned = append(pinned, pkg)
+				}
+			}
+			fmt.Fprintf(os.Stderr, "[multi-roblox] About to pip-install (--user): %s. Press Ctrl-C to abort.\n",
+				strings.Join(pinned, ", "))
 
-				// Try pip install with --user flag for user-level install
-				installCmd := exec.Command(pythonPath, "-m", "pip", "install", "--user", "--quiet", pkg)
+			// Install all required packages at pinned versions, --user only.
+			for _, pkg := range requiredPackages {
+				spec, ok := pinnedPackages[pkg]
+				if !ok {
+					spec = pkg // fall back to unpinned name if not in our map
+				}
+
+				logger.LogInfo("Auto-installing Python package: %s using %s", spec, pythonPath)
+
+				installCmd := exec.Command(pythonPath, "-m", "pip", "install", "--user", spec)
 				installOutput, installErr := installCmd.CombinedOutput()
+				// Show pip output so the user sees what's happening (no --quiet).
+				if len(installOutput) > 0 {
+					fmt.Fprintf(os.Stderr, "[multi-roblox] pip: %s", string(installOutput))
+				}
 
 				if installErr != nil {
-					logger.LogError("Failed to install %s: %v, output: %s", pkg, installErr, string(installOutput))
-					// Try without --user flag
-					installCmd = exec.Command(pythonPath, "-m", "pip", "install", "--quiet", pkg)
-					installOutput, installErr = installCmd.CombinedOutput()
-					if installErr != nil {
-						logger.LogError("Retry without --user also failed: %v", installErr)
-					}
-				} else {
-					logger.LogInfo("Successfully installed %s", pkg)
+					logger.LogError("Failed to install %s with --user: %v", spec, installErr)
+					// Do NOT retry without --user — that would pollute the system
+					// Python environment. Surface the error instead.
+					return nil, fmt.Errorf("pip install --user %s failed: %w\noutput: %s", spec, installErr, string(installOutput))
 				}
+
+				logger.LogInfo("Successfully installed %s", spec)
 			}
 
 			// Retry the script after installing
