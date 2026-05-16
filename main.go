@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"image/color"
 	"insadem/multi_roblox_macos/internal/account_manager"
@@ -312,8 +313,17 @@ func createInstancesTab(window fyne.Window, ctx context.Context) fyne.CanvasObje
 	})
 
 	closeAllButton := widget.NewButtonWithIcon("Close All", resourceMopPng, func() {
-		close_all_app_instances.Close("RobloxPlayer")
-		updateInstances()
+		instancesMu.RLock()
+		count := len(currentInstances)
+		instancesMu.RUnlock()
+		dialog.ShowConfirm("Close All Instances",
+			fmt.Sprintf("This will close %d running instance(s). Continue?", count),
+			func(yes bool) {
+				if yes {
+					close_all_app_instances.Close("RobloxPlayer")
+					updateInstances()
+				}
+			}, window)
 	})
 
 	// Layout
@@ -1277,11 +1287,11 @@ func createAccountsTab(window fyne.Window) fyne.CanvasObject {
 
 		dialog.ShowForm("Add Account", "Add", "Cancel", formItems, func(ok bool) {
 			if ok && usernameEntry.Text != "" {
-				// Password is now optional - cookie method doesn't need it
+				// Password is optional — cookie method does not need it.
+				// When empty, skip Keychain storage entirely rather than
+				// storing the literal "cookie_auth" placeholder, which
+				// leaks an obviously-guessable sentinel into the Keychain.
 				password := passwordEntry.Text
-				if password == "" {
-					password = "cookie_auth" // Placeholder
-				}
 				if err := account_manager.AddAccount(usernameEntry.Text, password, labelEntry.Text); err != nil {
 					dialog.ShowError(fmt.Errorf("Failed to add account: %w", err), window)
 				} else {
@@ -1368,7 +1378,11 @@ You can then switch to this account instantly when launching games!`, displayNam
 		cookie, err := cookie_manager.GetCurrentRobloxCookie()
 		if err != nil {
 			logger.LogError("Failed to capture cookie: %v", err)
-			dialog.ShowError(fmt.Errorf("Failed to capture cookie:\n%v\n\nMake sure you're logged into Roblox in Vivaldi.", err), window)
+			if errors.Is(err, cookie_manager.ErrVivaldiNotInstalled) {
+				dialog.ShowError(fmt.Errorf("Vivaldi browser is required for cookie capture.\n\nDownload it at vivaldi.com, log into Roblox there, then try again."), window)
+			} else {
+				dialog.ShowError(fmt.Errorf("Failed to capture cookie:\n%v\n\nMake sure you're logged into Roblox in Vivaldi.", err), window)
+			}
 			return
 		}
 
@@ -1462,9 +1476,12 @@ func showLabelDialog(window fyne.Window, pid int, refreshCallback func()) {
 				colorValue = colorMap[selected]
 			}
 
-			if labelEntry.Text != "" {
+			// Persist if either text or color is set.
+			// Previously color-only changes were silently dropped when
+			// text was empty.
+			if labelEntry.Text != "" || colorValue != "" {
 				label_manager.SetLabel(pid, labelEntry.Text, colorValue)
-			} else if labelEntry.Text == "" && colorValue == "" {
+			} else {
 				label_manager.DeleteLabel(pid)
 			}
 

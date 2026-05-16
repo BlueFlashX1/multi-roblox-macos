@@ -122,12 +122,19 @@ func AddAccount(username, password, label string) error {
 	}
 	logger.LogDebug("Generated account ID: %s", id)
 
-	// Store password in macOS Keychain
-	if err := storePasswordInKeychain(id, password); err != nil {
-		logger.LogError("Failed to store password in keychain for %s: %v", username, err)
-		return fmt.Errorf("failed to store password in keychain: %w", err)
+	// Store password in macOS Keychain — skip entirely when password is empty
+	// (cookie-only accounts). Storing a placeholder would leak a guessable
+	// sentinel value; GetPassword callers are expected to handle the not-found
+	// case as the cookie-only code path.
+	if password != "" {
+		if err := storePasswordInKeychain(id, password); err != nil {
+			logger.LogError("Failed to store password in keychain for %s: %v", username, err)
+			return fmt.Errorf("failed to store password in keychain: %w", err)
+		}
+		logger.LogDebug("Password stored in keychain for account ID: %s", id)
+	} else {
+		logger.LogDebug("No password provided for %s — skipping Keychain (cookie-only account)", username)
 	}
-	logger.LogDebug("Password stored in keychain for account ID: %s", id)
 
 	// Add account metadata (no password stored here)
 	account := Account{

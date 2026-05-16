@@ -15,6 +15,11 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+// ErrVivaldiNotInstalled is returned by GetVivaldiCookiePath when the Vivaldi
+// profile directory does not exist. Callers can errors.Is(err, ErrVivaldiNotInstalled)
+// and display a user-friendly install prompt.
+var ErrVivaldiNotInstalled = fmt.Errorf("Vivaldi is not installed")
+
 // RobloxCookie represents a .ROBLOSECURITY cookie
 type RobloxCookie struct {
 	Value      string
@@ -33,7 +38,10 @@ func GetVivaldiCookiePath() (string, error) {
 	cookiePath := filepath.Join(home, "Library", "Application Support", "Vivaldi", "Default", "Cookies")
 
 	if _, err := os.Stat(cookiePath); os.IsNotExist(err) {
-		return "", fmt.Errorf("Vivaldi cookie database not found at: %s", cookiePath)
+		// Return a sentinel error so callers can surface a user-friendly message
+		// rather than a raw file path.
+		return "", fmt.Errorf("%w: Vivaldi browser is required for cookie capture. "+
+			"Download it at vivaldi.com, log into Roblox there, then try again.", ErrVivaldiNotInstalled)
 	}
 
 	return cookiePath, nil
