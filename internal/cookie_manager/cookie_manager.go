@@ -914,20 +914,32 @@ func ClearRobloxAppCookies() error {
 	}
 
 	for _, path := range pathsToRemove {
-		if _, err := os.Stat(path); err == nil {
-			info, _ := os.Stat(path)
-			if info.IsDir() {
-				if err := os.RemoveAll(path); err != nil {
-					logger.LogError("Failed to remove %s: %v", path, err)
-				} else {
-					logger.LogInfo("Removed directory: %s", path)
-				}
+		// Lstat (not Stat) so we see the symlink itself, not its target.
+		// Refuse to remove symlinks — a local attacker could replace a
+		// Roblox path with a symlink to a sensitive file (e.g. ~/.zshrc).
+		linfo, lerr := os.Lstat(path)
+		if os.IsNotExist(lerr) {
+			continue
+		}
+		if lerr != nil {
+			logger.LogError("Lstat failed for %s: %v — skipping", path, lerr)
+			continue
+		}
+		if linfo.Mode()&os.ModeSymlink != 0 {
+			logger.LogError("Refusing to remove %s — it is a symlink (possible attack)", path)
+			continue
+		}
+		if linfo.IsDir() {
+			if err := os.RemoveAll(path); err != nil {
+				logger.LogError("Failed to remove %s: %v", path, err)
 			} else {
-				if err := os.Remove(path); err != nil {
-					logger.LogError("Failed to remove %s: %v", path, err)
-				} else {
-					logger.LogInfo("Removed file: %s", path)
-				}
+				logger.LogInfo("Removed directory: %s", path)
+			}
+		} else {
+			if err := os.Remove(path); err != nil {
+				logger.LogError("Failed to remove %s: %v", path, err)
+			} else {
+				logger.LogInfo("Removed file: %s", path)
 			}
 		}
 	}
@@ -1009,6 +1021,20 @@ func ClearVivaldiRobloxCookies() error {
 // This is the most reliable way to switch accounts as it bypasses browser dependency
 func SetRobloxAppCookie(cookieValue string) error {
 	logger.LogInfo("Writing cookie directly to Roblox app's binarycookies...")
+
+	// Symlink-substitution guard: lstat the target before Python touches it.
+	// A local attacker could replace the binarycookies path with a symlink to
+	// ~/.zshrc or another sensitive file; our Python write would then clobber it.
+	home, homeErr := os.UserHomeDir()
+	if homeErr != nil {
+		return fmt.Errorf("SetRobloxAppCookie: failed to get home dir: %w", homeErr)
+	}
+	targetPath := filepath.Join(home, "Library", "HTTPStorages", "com.roblox.RobloxPlayer.binarycookies")
+	if linfo, lerr := os.Lstat(targetPath); lerr == nil {
+		if linfo.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("SetRobloxAppCookie: refusing to write — target is a symlink (possible attack): %s", targetPath)
+		}
+	}
 
 	// Cookie passed via environment variable — never interpolated into script source
 	// to prevent injection if the cookie value contains quotes, newlines, or other
