@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"image/color"
 	"insadem/multi_roblox_macos/internal/account_manager"
@@ -933,6 +934,13 @@ func launchJoinFriend(placeID, followUserID int64, authTicket string, window fyn
 	} else {
 		// Without auth ticket - use roblox:// protocol
 		protocolString = fmt.Sprintf("roblox://placeId=%d", placeID)
+	}
+
+	// Preventive redaction — protocolString embeds gameinfo:<TICKET> when an
+	// authTicket is present. Never log the raw string; log only length + sha256[:4].
+	{
+		ps := sha256.Sum256([]byte(protocolString))
+		logger.LogDebug("launchJoinFriend: protocol string built (len=%d sha8=%x)", len(protocolString), ps[:4])
 	}
 
 	// Check if Roblox is running for multi-instance

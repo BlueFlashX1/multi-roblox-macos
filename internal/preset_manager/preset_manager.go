@@ -324,7 +324,9 @@ func LaunchPresetWithTicket(preset Preset, authTicket string) (int, error) {
 		protocolString = preset.URL
 	} else {
 		protocolString = preset.URL
-		logger.LogDebug("Using original URL (may not launch game): %s", protocolString)
+		// Redact URL — saved presets may embed gameinfo:<TICKET> deep-links.
+		urlSum := sha256.Sum256([]byte(preset.URL))
+		logger.LogDebug("Using original URL (may not launch game): len=%d sha8=%x", len(preset.URL), urlSum[:4])
 	}
 
 	// Log only the length and a 4-byte SHA-256 prefix — never the raw string which
