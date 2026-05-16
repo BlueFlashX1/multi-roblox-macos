@@ -197,24 +197,29 @@ except Exception as e:
 		return nil, fmt.Errorf("failed to read cookie: %w, output: %s", err, string(output))
 	}
 
-	// Parse JSON result
-	var result map[string]interface{}
+	// Parse JSON result using a typed struct to avoid runtime panics from bad
+	// type assertions on map[string]interface{}.
+	var result struct {
+		Value   string  `json:"value"`
+		Expires float64 `json:"expires"`
+		Error   string  `json:"error"`
+	}
 	if err := json.Unmarshal(output, &result); err != nil {
 		return nil, fmt.Errorf("failed to parse cookie result: %w, output: %s", err, string(output))
 	}
 
-	if errMsg, ok := result["error"].(string); ok {
-		return nil, fmt.Errorf("%s", errMsg)
+	if result.Error != "" {
+		return nil, fmt.Errorf("%s", result.Error)
 	}
 
-	value, ok := result["value"].(string)
-	if !ok || value == "" {
+	if result.Value == "" {
 		return nil, fmt.Errorf("empty cookie value")
 	}
 
+	value := result.Value
 	var expiresUTC int64
-	if exp, ok := result["expires"].(float64); ok {
-		expiresUTC = int64(exp)
+	if result.Expires != 0 {
+		expiresUTC = int64(result.Expires)
 	}
 
 	logger.LogInfo("Successfully read .ROBLOSECURITY cookie (length: %d)", len(value))
@@ -698,22 +703,24 @@ except Exception as e:
 		return "", fmt.Errorf("failed to get auth ticket: %w", err)
 	}
 
-	var result map[string]interface{}
+	var result struct {
+		Ticket string `json:"ticket"`
+		Error  string `json:"error"`
+	}
 	if err := json.Unmarshal(output, &result); err != nil {
 		return "", fmt.Errorf("failed to parse auth ticket response: %s", string(output))
 	}
 
-	if errMsg, ok := result["error"].(string); ok {
-		return "", fmt.Errorf("%s", errMsg)
+	if result.Error != "" {
+		return "", fmt.Errorf("%s", result.Error)
 	}
 
-	ticket, ok := result["ticket"].(string)
-	if !ok || ticket == "" {
+	if result.Ticket == "" {
 		return "", fmt.Errorf("no auth ticket in response")
 	}
 
-	logger.LogInfo("Successfully got auth ticket (length: %d)", len(ticket))
-	return ticket, nil
+	logger.LogSecret("auth-ticket", result.Ticket)
+	return result.Ticket, nil
 }
 
 // VerifyCookieUsername uses Roblox API to get the username associated with a cookie
@@ -748,17 +755,20 @@ except Exception as e:
 		return "", fmt.Errorf("API call failed: %w", err)
 	}
 
-	var result map[string]interface{}
+	var result struct {
+		Username string `json:"username"`
+		ID       int64  `json:"id"`
+		Error    string `json:"error"`
+	}
 	if err := json.Unmarshal(output, &result); err != nil {
 		return "", fmt.Errorf("failed to parse response: %s", string(output))
 	}
 
-	if errMsg, ok := result["error"].(string); ok {
-		return "", fmt.Errorf("%s", errMsg)
+	if result.Error != "" {
+		return "", fmt.Errorf("%s", result.Error)
 	}
 
-	username, _ := result["username"].(string)
-	return username, nil
+	return result.Username, nil
 }
 
 // GetCurrentBrowserCookieUsername gets the username from the currently active browser cookie
