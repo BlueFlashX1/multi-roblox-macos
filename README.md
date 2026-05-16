@@ -7,7 +7,7 @@
 
 Run multiple Roblox instances with full account management.
 
-## ⚠️ Vivaldi Browser Required
+## Vivaldi Browser Required
 
 **Cookie capture currently only works with [Vivaldi browser](https://vivaldi.com/download/).**
 
@@ -109,11 +109,17 @@ fyne package -os darwin -icon ./resources/app_icon.png
 
 | Platform                 | Status         |
 | ------------------------ | -------------- |
-| Apple Silicon (M1/M2/M3/M4) | ✅ Works       |
-| Intel Mac                | ⚠️ Untested    |
+| Apple Silicon (M1/M2/M3/M4) | Works       |
+| Intel Mac                | Untested    |
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md) for per-version release notes. The current version is documented in the app's **About** tab.
 
 ---
 
 ## Credits
 
-Original by [Insadem](https://github.com/Insadem) • Enhanced by [BlueFlashX1](https://github.com/BlueFlashX1)
+Original by [Insadem](https://github.com/Insadem) - Enhanced by [BlueFlashX1](https://github.com/BlueFlashX1)
