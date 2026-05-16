@@ -864,31 +864,48 @@ func SaveCurrentBrowserCookieToAccount(accounts []struct{ ID, Username string })
 	return nil
 }
 
-// ClearVivaldiRobloxCookies clears Roblox cookies from Vivaldi browser
-// This forces the user to log in again when visiting Roblox in the browser
+// ClearVivaldiRobloxCookies clears Roblox cookies from Vivaldi browser using
+// database/sql + go-sqlite3 (same driver used by SetRobloxCookie). The
+// previous implementation shelled out to the sqlite3 CLI binary, which is an
+// unnecessary external dependency.
+//
+// TOCTOU / locking: isVivaldiRunning() is a fast pre-flight that provides an
+// early exit with a clean error. However, Vivaldi can launch between the check
+// and the database open. To prevent DB corruption, we open with
+// _locking_mode=exclusive immediately after connecting — if Vivaldi holds the
+// lock we get a clean SQLITE_BUSY error rather than silent data corruption.
 func ClearVivaldiRobloxCookies() error {
 	logger.LogInfo("Clearing Roblox cookies from Vivaldi...")
 
-	home, err := os.UserHomeDir()
+	// Fast pre-flight: refuse early if Vivaldi is running.
+	// Not load-bearing for correctness (we also grab an exclusive lock below),
+	// but avoids the expensive open when we know it will fail.
+	if isVivaldiRunning() {
+		return fmt.Errorf("Vivaldi is currently running — close it before clearing cookies")
+	}
+
+	cookiesPath, err := GetVivaldiCookiePath()
 	if err != nil {
 		return err
 	}
 
-	// Path to Vivaldi's cookies database
-	cookiesPath := filepath.Join(home, "Library", "Application Support", "Vivaldi", "Default", "Cookies")
-
-	// We need to use sqlite3 to delete the cookies
-	// First, close Vivaldi if running
-	exec.Command("pkill", "-x", "Vivaldi").Run()
-	time.Sleep(500 * time.Millisecond)
-
-	// Delete Roblox cookies from the database
-	deleteSQL := `DELETE FROM cookies WHERE host_key LIKE '%roblox.com';`
-	cmd := exec.Command("sqlite3", cookiesPath, deleteSQL)
-	output, err := cmd.CombinedOutput()
+	// Open with exclusive locking. If another process (e.g. Vivaldi launched
+	// between the check above and now) holds a lock, this returns SQLITE_BUSY
+	// instead of corrupting the database.
+	db, err := sql.Open("sqlite3", cookiesPath+"?_locking_mode=exclusive")
 	if err != nil {
-		logger.LogError("Failed to clear Vivaldi cookies: %v, output: %s", err, string(output))
-		return fmt.Errorf("failed to clear cookies: %v", err)
+		return fmt.Errorf("failed to open Vivaldi cookie database: %w", err)
+	}
+	defer db.Close()
+
+	// Immediately acquire the exclusive lock via a benign PRAGMA.
+	if _, err := db.Exec("PRAGMA locking_mode=EXCLUSIVE"); err != nil {
+		return fmt.Errorf("failed to acquire exclusive lock on Vivaldi cookies DB (is Vivaldi running?): %w", err)
+	}
+
+	if _, err := db.Exec(`DELETE FROM cookies WHERE host_key LIKE '%roblox.com'`); err != nil {
+		logger.LogError("Failed to clear Vivaldi Roblox cookies: %v", err)
+		return fmt.Errorf("failed to clear Vivaldi Roblox cookies: %w", err)
 	}
 
 	logger.LogInfo("Vivaldi Roblox cookies cleared successfully")
