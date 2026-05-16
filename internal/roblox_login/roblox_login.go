@@ -8,10 +8,6 @@ import (
 	"time"
 )
 
-// AccountSwitchNeeded indicates if we need to switch accounts before launching
-var AccountSwitchNeeded = false
-var PendingUsername = ""
-
 // LaunchWithAccount launches Roblox and attempts to auto-login
 // Note: This is a simplified version. Full automation would require
 // AppleScript/UI automation which is complex and fragile.
