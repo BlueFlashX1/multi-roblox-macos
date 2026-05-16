@@ -301,8 +301,10 @@ func SetRobloxCookie(cookie *RobloxCookie) error {
 		return err
 	}
 
-	// Open the SQLite database
-	db, err := sql.Open("sqlite3", cookiePath)
+	// Open the SQLite database with exclusive locking — same as
+	// ClearVivaldiRobloxCookies (6145817). If Vivaldi launches mid-write,
+	// the exclusive lock prevents DB corruption.
+	db, err := sql.Open("sqlite3", cookiePath+"?_locking_mode=exclusive")
 	if err != nil {
 		return fmt.Errorf("failed to open cookie database: %w", err)
 	}
@@ -507,6 +509,12 @@ func robloxStagingDir() (string, error) {
 	dir := filepath.Join(home, "Library", "Caches", "multi_roblox_macos", "instances")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create staging dir: %w", err)
+	}
+	// Enforce 0700 on pre-existing dirs: MkdirAll only sets the mode on
+	// creation. A user whose ~/Library/Caches/multi_roblox_macos was created
+	// before this fix may have 0755. Explicit Chmod is self-healing.
+	if err := os.Chmod(dir, 0700); err != nil {
+		return "", fmt.Errorf("failed to set staging dir mode: %w", err)
 	}
 	return dir, nil
 }

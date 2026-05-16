@@ -5,6 +5,15 @@
 /*.pkg
 /Multi Roblox Manager.app/
 
+# Release archives
+*.tar.gz
+*.zip
+*.exe
+
+# Build directories
+/build/
+/dist/
+
 # macOS
 .DS_Store
 */.DS_Store

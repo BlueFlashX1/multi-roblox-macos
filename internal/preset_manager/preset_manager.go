@@ -261,6 +261,12 @@ func robloxStagingDir() (string, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create staging dir: %w", err)
 	}
+	// Enforce 0700 on pre-existing dirs: MkdirAll only sets the mode on
+	// creation. A user whose ~/Library/Caches/multi_roblox_macos was created
+	// before this fix may have 0755. Explicit Chmod is self-healing.
+	if err := os.Chmod(dir, 0700); err != nil {
+		return "", fmt.Errorf("failed to set staging dir mode: %w", err)
+	}
 	return dir, nil
 }
 
@@ -279,7 +285,9 @@ func getNextRobloxCopyPath() string {
 	}
 	// All slots occupied — remove Roblox2.app and reuse it.
 	path := filepath.Join(stagingDir, "Roblox2.app")
-	os.RemoveAll(path)
+	if err := os.RemoveAll(path); err != nil {
+		logger.LogError("getNextRobloxCopyPath: failed to clean stale slot %s: %v", path, err)
+	}
 	return path
 }
 
