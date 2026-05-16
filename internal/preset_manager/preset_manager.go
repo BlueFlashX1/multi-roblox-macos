@@ -243,20 +243,38 @@ func isRobloxRunning() bool {
 	return err == nil
 }
 
+// robloxStagingDir returns the per-user staging directory for multi-instance
+// Roblox.app copies. Using ~/Library/Caches (mode 0700) instead of /tmp
+// prevents symlink-substitution attacks on multi-user Macs.
+func robloxStagingDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home dir: %w", err)
+	}
+	dir := filepath.Join(home, "Library", "Caches", "multi_roblox_macos", "instances")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create staging dir: %w", err)
+	}
+	return dir, nil
+}
+
 // getNextRobloxCopyPath returns the next available path for a Roblox copy
 func getNextRobloxCopyPath() string {
-	for i := 2; i <= 10; i++ {
-		path := fmt.Sprintf("/tmp/Roblox%d.app", i)
+	stagingDir, err := robloxStagingDir()
+	if err != nil {
+		logger.LogError("getNextRobloxCopyPath: %v — falling back is unsafe, returning empty", err)
+		return ""
+	}
+	for i := 2; i <= 99; i++ {
+		path := filepath.Join(stagingDir, fmt.Sprintf("Roblox%d.app", i))
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			return path
 		}
 	}
-	// Cleanup old ones and use Roblox2.app
-	for i := 2; i <= 10; i++ {
-		path := fmt.Sprintf("/tmp/Roblox%d.app", i)
-		os.RemoveAll(path)
-	}
-	return "/tmp/Roblox2.app"
+	// All slots occupied — remove Roblox2.app and reuse it.
+	path := filepath.Join(stagingDir, "Roblox2.app")
+	os.RemoveAll(path)
+	return path
 }
 
 // copyRobloxApp copies Roblox.app to a temporary location for multi-instance

@@ -482,9 +482,30 @@ func PreLaunchCookieCheck(accountID string, expectedUsername string) (string, er
 	return "", fmt.Errorf("cookie error: %s", result.ErrorMessage)
 }
 
-// CleanupTempRobloxCopies removes temporary Roblox app copies that aren't in use
+// robloxStagingDir returns the per-user staging directory for multi-instance
+// Roblox.app copies (~/Library/Caches/multi_roblox_macos/instances, mode 0700).
+func robloxStagingDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home dir: %w", err)
+	}
+	dir := filepath.Join(home, "Library", "Caches", "multi_roblox_macos", "instances")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create staging dir: %w", err)
+	}
+	return dir, nil
+}
+
+// CleanupTempRobloxCopies removes temporary Roblox app copies that aren't in use.
+// Uses filepath.Glob over the staging dir to catch all variants regardless of slot count.
 func CleanupTempRobloxCopies() {
 	logger.LogInfo("Cleaning up temporary Roblox app copies...")
+
+	stagingDir, err := robloxStagingDir()
+	if err != nil {
+		logger.LogError("CleanupTempRobloxCopies: %v", err)
+		return
+	}
 
 	// Get list of currently running Roblox processes and their paths
 	cmd := exec.Command("ps", "aux")
@@ -495,23 +516,27 @@ func CleanupTempRobloxCopies() {
 	}
 	psOutput := string(output)
 
-	cleaned := 0
-	for i := 2; i <= 10; i++ {
-		path := fmt.Sprintf("/tmp/Roblox%d.app", i)
-		if _, err := os.Stat(path); err == nil {
-			// Check if this copy is currently in use
-			if strings.Contains(psOutput, path) {
-				logger.LogDebug("Skipping %s - still in use", path)
-				continue
-			}
+	// Glob all Roblox*.app entries in the staging dir — catches any slot count.
+	matches, err := filepath.Glob(filepath.Join(stagingDir, "Roblox*.app"))
+	if err != nil {
+		logger.LogError("CleanupTempRobloxCopies glob failed: %v", err)
+		return
+	}
 
-			// Not in use, safe to remove
-			if err := os.RemoveAll(path); err != nil {
-				logger.LogError("Failed to remove %s: %v", path, err)
-			} else {
-				logger.LogDebug("Removed: %s", path)
-				cleaned++
-			}
+	cleaned := 0
+	for _, path := range matches {
+		// Check if this copy is currently in use
+		if strings.Contains(psOutput, path) {
+			logger.LogDebug("Skipping %s - still in use", path)
+			continue
+		}
+
+		// Not in use, safe to remove
+		if err := os.RemoveAll(path); err != nil {
+			logger.LogError("Failed to remove %s: %v", path, err)
+		} else {
+			logger.LogDebug("Removed: %s", path)
+			cleaned++
 		}
 	}
 
