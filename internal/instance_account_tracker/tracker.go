@@ -26,11 +26,9 @@ func GetMappingPath() string {
 	return filepath.Join(home, "Library", "Application Support", "multi_roblox_macos", "instance_accounts.json")
 }
 
-// LoadMappings loads instance-account mappings from disk
-func LoadMappings() ([]InstanceAccountMap, error) {
-	mu.Lock()
-	defer mu.Unlock()
-
+// loadMappingsLocked reads instance-account mappings from disk.
+// Caller MUST hold mu before calling.
+func loadMappingsLocked() ([]InstanceAccountMap, error) {
 	path := GetMappingPath()
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -51,11 +49,9 @@ func LoadMappings() ([]InstanceAccountMap, error) {
 	return maps, nil
 }
 
-// SaveMappings saves mappings to disk
-func SaveMappings(maps []InstanceAccountMap) error {
-	mu.Lock()
-	defer mu.Unlock()
-
+// saveMappingsLocked persists mappings to disk.
+// Caller MUST hold mu before calling.
+func saveMappingsLocked(maps []InstanceAccountMap) error {
 	path := GetMappingPath()
 	dir := filepath.Dir(path)
 
@@ -72,9 +68,26 @@ func SaveMappings(maps []InstanceAccountMap) error {
 	return os.WriteFile(path, data, 0600)
 }
 
+// LoadMappings loads instance-account mappings from disk (public API, acquires lock).
+func LoadMappings() ([]InstanceAccountMap, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	return loadMappingsLocked()
+}
+
+// SaveMappings saves mappings to disk (public API, acquires lock).
+func SaveMappings(maps []InstanceAccountMap) error {
+	mu.Lock()
+	defer mu.Unlock()
+	return saveMappingsLocked(maps)
+}
+
 // TrackInstance records which account was used to launch an instance
 func TrackInstance(pid int, accountID string) error {
-	maps, err := LoadMappings()
+	mu.Lock()
+	defer mu.Unlock()
+
+	maps, err := loadMappingsLocked()
 	if err != nil {
 		return err
 	}
@@ -94,12 +107,15 @@ func TrackInstance(pid int, accountID string) error {
 		LaunchedAt: time.Now(),
 	})
 
-	return SaveMappings(filtered)
+	return saveMappingsLocked(filtered)
 }
 
 // GetAccountForInstance returns the account ID for a given PID
 func GetAccountForInstance(pid int) (string, bool) {
-	maps, err := LoadMappings()
+	mu.Lock()
+	defer mu.Unlock()
+
+	maps, err := loadMappingsLocked()
 	if err != nil {
 		return "", false
 	}
@@ -115,7 +131,10 @@ func GetAccountForInstance(pid int) (string, bool) {
 
 // CleanupStaleInstances removes mappings for PIDs that no longer exist
 func CleanupStaleInstances(activePIDs []int) error {
-	maps, err := LoadMappings()
+	mu.Lock()
+	defer mu.Unlock()
+
+	maps, err := loadMappingsLocked()
 	if err != nil {
 		return err
 	}
@@ -134,12 +153,15 @@ func CleanupStaleInstances(activePIDs []int) error {
 		}
 	}
 
-	return SaveMappings(filtered)
+	return saveMappingsLocked(filtered)
 }
 
 // UntrackInstance removes tracking for a specific PID
 func UntrackInstance(pid int) error {
-	maps, err := LoadMappings()
+	mu.Lock()
+	defer mu.Unlock()
+
+	maps, err := loadMappingsLocked()
 	if err != nil {
 		return err
 	}
@@ -151,5 +173,5 @@ func UntrackInstance(pid int) error {
 		}
 	}
 
-	return SaveMappings(filtered)
+	return saveMappingsLocked(filtered)
 }
