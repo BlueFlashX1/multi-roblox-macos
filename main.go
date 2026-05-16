@@ -1496,7 +1496,9 @@ func showEditAccountDialog(window fyne.Window, accountID string, refreshCallback
 	}, window)
 }
 
-// showAccountSelectionDialog shows account selection when launching new instance
+// showAccountSelectionDialog shows account selection when launching new instance.
+// Cookie statuses are validated asynchronously after the dialog opens so the
+// UI appears immediately without blocking on HTTPS round-trips per account.
 func showAccountSelectionDialog(window fyne.Window, launchCallback func()) {
 	logger.LogInfo("showAccountSelectionDialog called - New Instance launch")
 
@@ -1510,25 +1512,27 @@ func showAccountSelectionDialog(window fyne.Window, launchCallback func()) {
 
 	logger.LogDebug("Found %d accounts for selection", len(accounts))
 
-	// Create account selection options with cookie status
-	var options []string
-	options = append(options, "Launch without account (opens Roblox home)")
-	for _, acc := range accounts {
+	// Build base display texts (no status yet). statusBindings holds one
+	// binding.String per account slot; goroutines update them as results arrive.
+	baseTexts := make([]string, len(accounts))
+	statusBindings := make([]binding.String, len(accounts))
+
+	for i, acc := range accounts {
 		displayText := acc.Username
 		if acc.Label != "" {
 			displayText = fmt.Sprintf("%s (%s)", acc.Label, acc.Username)
 		}
-		// Add status indicator
-		result := cookie_manager.ValidateCookieForAccount(acc.ID)
-		switch result.Status {
-		case cookie_manager.CookieStatusValid:
-			displayText = "✅ " + displayText
-		case cookie_manager.CookieStatusExpired:
-			displayText = "❌ " + displayText + " (expired)"
-		case cookie_manager.CookieStatusNone:
-			displayText = "⚪ " + displayText + " (no cookie)"
-		}
-		options = append(options, displayText)
+		baseTexts[i] = displayText
+		statusBindings[i] = binding.NewString()
+		statusBindings[i].Set("🔄 " + displayText + " (checking…)") //nolint:errcheck
+	}
+
+	// One combined option slice that the Select widget uses.
+	var options []string
+	options = append(options, "Launch without account (opens Roblox home)")
+	for i := range accounts {
+		val, _ := statusBindings[i].Get()
+		options = append(options, val)
 	}
 
 	selectWidget := widget.NewSelect(options, nil)
@@ -1546,10 +1550,46 @@ func showAccountSelectionDialog(window fyne.Window, launchCallback func()) {
 
 	customDialog := dialog.NewCustomWithoutButtons("Launch New Instance", content, window)
 
+	// Validate cookies asynchronously — dialog is already visible.
+	// Each goroutine updates the binding for its slot; once all are done
+	// the Select options are refreshed on the main thread.
+	for i, acc := range accounts {
+		i, acc := i, acc // capture for goroutine
+		go func() {
+			result := cookie_manager.ValidateCookieForAccount(acc.ID)
+			var newText string
+			switch result.Status {
+			case cookie_manager.CookieStatusValid:
+				newText = "✅ " + baseTexts[i]
+			case cookie_manager.CookieStatusExpired:
+				newText = "❌ " + baseTexts[i] + " (expired)"
+			case cookie_manager.CookieStatusNone:
+				newText = "⚪ " + baseTexts[i] + " (no cookie)"
+			default:
+				newText = "⚠️ " + baseTexts[i]
+			}
+			statusBindings[i].Set(newText) //nolint:errcheck
+
+			// Rebuild options slice and update Select widget.
+			// This may race if two goroutines finish simultaneously, but
+			// SetOptions is safe to call from any goroutine in Fyne v2.
+			updatedOpts := make([]string, len(accounts)+1)
+			updatedOpts[0] = "Launch without account (opens Roblox home)"
+			for j := range accounts {
+				v, _ := statusBindings[j].Get()
+				updatedOpts[j+1] = v
+			}
+			selectWidget.Options = updatedOpts
+			selectWidget.Refresh()
+		}()
+	}
+
 	// Launch button
 	launchBtn := widget.NewButton("🚀 Launch Instance", func() {
+		// Match against the live Options slice (may differ from initial options
+		// after async status updates have run).
 		selectedIndex := -1
-		for i, opt := range options {
+		for i, opt := range selectWidget.Options {
 			if opt == selectWidget.Selected {
 				selectedIndex = i
 				break
