@@ -609,17 +609,21 @@ func decryptV10(encrypted []byte) (string, error) {
 // decryptWithPython uses Python's cryptography library to decrypt
 // macOS Chromium uses AES-128-CBC with PKCS7 padding
 func decryptWithPython(encrypted []byte, key string) (string, error) {
-	// Encode the encrypted value as base64 for passing to Python
+	// Encode the encrypted value as base64 for passing to Python via env var.
+	// The Vivaldi Safe Storage key is passed via env var — never interpolated
+	// into the script source to avoid injection if the key contains quotes or
+	// newlines.
 	encB64 := base64.StdEncoding.EncodeToString(encrypted)
 
-	pythonScript := fmt.Sprintf(`
+	const pythonScript = `
 import base64
 import hashlib
+import os
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 
-encrypted = base64.b64decode('%s')
-password = '%s'
+encrypted = base64.b64decode(os.environ['MRM_ENC_B64'])
+password = os.environ['MRM_CRYPTO_KEY']
 
 # Derive key using PBKDF2 (macOS Chrome uses 1003 iterations, 16 byte key)
 key = hashlib.pbkdf2_hmac('sha1', password.encode('utf-8'), b'saltysalt', 1003, dklen=16)
@@ -646,9 +650,13 @@ if encrypted[:3] == b'v10':
 else:
     # Not v10 encrypted, try as plain text
     print(encrypted.decode('utf-8', errors='ignore'))
-`, encB64, key)
+`
 
 	cmd := exec.Command("python3", "-c", pythonScript)
+	cmd.Env = append(os.Environ(),
+		"MRM_ENC_B64="+encB64,
+		"MRM_CRYPTO_KEY="+key,
+	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("Python decryption failed: %w, output: %s", err, string(output))
@@ -676,11 +684,15 @@ func ClearSavedCookie(accountID string) error {
 func GetAuthTicket(cookieValue string) (string, error) {
 	logger.LogInfo("Getting Roblox auth ticket from cookie...")
 
-	pythonScript := fmt.Sprintf(`
+	// Cookie is passed via environment variable — never interpolated into the
+	// script source to prevent injection if the cookie value contains quotes or
+	// newlines (possible in a poisoned local DB row).
+	const pythonScript = `
 import urllib.request
 import json
+import os
 
-cookie = '''%s'''
+cookie = os.environ['MRM_ROBLOX_COOKIE']
 
 # First request to get CSRF token
 try:
@@ -721,9 +733,10 @@ except urllib.error.HTTPError as e:
         print(json.dumps({"error": f"HTTP {e.code}: {e.reason}"}))
 except Exception as e:
     print(json.dumps({"error": str(e)}))
-`, cookieValue)
+`
 
 	cmd := exec.Command("python3", "-c", pythonScript)
+	cmd.Env = append(os.Environ(), "MRM_ROBLOX_COOKIE="+cookieValue)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("failed to get auth ticket: %w", err)
@@ -751,11 +764,13 @@ except Exception as e:
 func VerifyCookieUsername(cookieValue string) (string, error) {
 	logger.LogInfo("Verifying cookie against Roblox API...")
 
-	pythonScript := fmt.Sprintf(`
+	// Cookie passed via environment variable — never interpolated into script source.
+	const pythonScript = `
 import urllib.request
 import json
+import os
 
-cookie = '%s'
+cookie = os.environ['MRM_ROBLOX_COOKIE']
 
 req = urllib.request.Request('https://users.roblox.com/v1/users/authenticated')
 req.add_header('Cookie', '.ROBLOSECURITY=' + cookie)
@@ -768,9 +783,10 @@ except urllib.error.HTTPError as e:
     print(json.dumps({"error": f"HTTP {e.code}: Cookie may be invalid or expired"}))
 except Exception as e:
     print(json.dumps({"error": str(e)}))
-`, cookieValue)
+`
 
 	cmd := exec.Command("python3", "-c", pythonScript)
+	cmd.Env = append(os.Environ(), "MRM_ROBLOX_COOKIE="+cookieValue)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("API call failed: %w", err)
@@ -916,7 +932,10 @@ func ClearVivaldiRobloxCookies() error {
 func SetRobloxAppCookie(cookieValue string) error {
 	logger.LogInfo("Writing cookie directly to Roblox app's binarycookies...")
 
-	pythonScript := fmt.Sprintf(`
+	// Cookie passed via environment variable — never interpolated into script source
+	// to prevent injection if the cookie value contains quotes, newlines, or other
+	// metacharacters (possible in a poisoned local DB row).
+	const pythonScript = `
 import struct
 import os
 from datetime import datetime
@@ -1000,7 +1019,7 @@ class BinaryCookieWriter:
 
         return True
 
-cookie_value = '''%s'''
+cookie_value = os.environ['MRM_ROBLOX_COOKIE']
 
 writer = BinaryCookieWriter()
 writer.add_cookie(
@@ -1015,9 +1034,10 @@ writer.add_cookie(
 output_path = os.path.expanduser('~/Library/HTTPStorages/com.roblox.RobloxPlayer.binarycookies')
 writer.write(output_path)
 print("SUCCESS")
-`, cookieValue)
+`
 
 	cmd := exec.Command("python3", "-c", pythonScript)
+	cmd.Env = append(os.Environ(), "MRM_ROBLOX_COOKIE="+cookieValue)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to write binarycookies: %w, output: %s", err, string(output))
