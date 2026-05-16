@@ -1015,7 +1015,7 @@ func createAboutTab(window fyne.Window) fyne.CanvasObject {
 	title.TextStyle = fyne.TextStyle{Bold: true}
 	title.Alignment = fyne.TextAlignCenter
 
-	version := widget.NewLabel("Version 3.1.0")
+	version := widget.NewLabel("Version 3.2.0")
 	version.Alignment = fyne.TextAlignCenter
 
 	description := widget.NewLabel(`Run multiple Roblox accounts simultaneously on macOS!
