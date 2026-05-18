@@ -21,3 +21,7 @@
 # IDE
 .idea/
 .vscode/
+
+# Claude Code agent-local state — per-workspace memory, never useful to commit
+.claude/
+memory/
