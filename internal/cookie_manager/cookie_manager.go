@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"insadem/multi_roblox_macos/internal/keychain"
 	"insadem/multi_roblox_macos/internal/logger"
 	"os"
 	"os/exec"
@@ -237,22 +238,11 @@ except Exception as e:
 func SaveCookieForAccount(accountID string, cookie *RobloxCookie) error {
 	logger.LogInfo("Saving .ROBLOSECURITY cookie for account: %s", accountID)
 
-	// Store in Keychain
+	// Store in Keychain via internal/keychain: the secret travels on stdin
+	// (security -i), never as a -w argv element visible to `ps`, and the
+	// stored value is round-trip verified.
 	keychainService := "multi-roblox-cookie"
-
-	// Delete existing entry
-	exec.Command("security", "delete-generic-password",
-		"-s", keychainService,
-		"-a", accountID).Run()
-
-	// Add new entry
-	cmd := exec.Command("security", "add-generic-password",
-		"-s", keychainService,
-		"-a", accountID,
-		"-w", cookie.Value,
-		"-U")
-
-	if err := cmd.Run(); err != nil {
+	if err := keychain.StoreGenericPassword(keychainService, accountID, cookie.Value); err != nil {
 		return fmt.Errorf("failed to save cookie to keychain: %w", err)
 	}
 

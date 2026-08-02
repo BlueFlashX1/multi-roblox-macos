@@ -3,9 +3,11 @@ package thumbnail_cache
 import (
 	"crypto/md5"
 	"fmt"
+	"insadem/multi_roblox_macos/internal/logger"
 	"insadem/multi_roblox_macos/internal/roblox_api"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // GetCachePath returns the thumbnail cache directory
@@ -69,4 +71,36 @@ func GetCachedThumbnail(thumbnailURL string) (string, bool) {
 func ClearCache() error {
 	cacheDir := GetCachePath()
 	return os.RemoveAll(cacheDir)
+}
+
+// CleanupOldThumbnails removes cached thumbnails older than maxAge. Called at
+// startup — without it the cache grew unbounded for the life of the install.
+// Evicted thumbnails are simply re-downloaded on next use.
+func CleanupOldThumbnails(maxAge time.Duration) {
+	cacheDir := GetCachePath()
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		logger.LogError("Thumbnail cleanup: failed to read cache dir: %v", err)
+		return
+	}
+
+	cutoff := time.Now().Add(-maxAge)
+	removed := 0
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil || info.IsDir() {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			if err := os.Remove(filepath.Join(cacheDir, entry.Name())); err != nil {
+				logger.LogError("Thumbnail cleanup: failed to remove %s: %v", entry.Name(), err)
+			} else {
+				removed++
+			}
+		}
+	}
+
+	if removed > 0 {
+		logger.LogInfo("Thumbnail cleanup: removed %d cached thumbnails older than %v", removed, maxAge)
+	}
 }

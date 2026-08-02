@@ -23,6 +23,12 @@ import (
 // pattern as instance_account_tracker.
 var mu sync.Mutex
 
+// stagingMu serializes slot selection + copy for staged Roblox.app copies.
+// Two near-simultaneous launches (double-clicking a preset) both passed the
+// os.Stat free-slot check and raced cp -R into the same destination.
+// Cross-process races are prevented by the single_instance guard in main.
+var stagingMu sync.Mutex
+
 // timeNowMillis returns current time in milliseconds
 func timeNowMillis() int64 {
 	return time.Now().UnixNano() / int64(time.Millisecond)
@@ -366,6 +372,23 @@ func copyRobloxApp(destPath string) error {
 	return nil
 }
 
+// stageRobloxCopy picks a free staging slot and copies Roblox.app into it as
+// one atomic operation under stagingMu, closing the Stat-then-copy TOCTOU
+// window between concurrent launches.
+func stageRobloxCopy() (string, error) {
+	stagingMu.Lock()
+	defer stagingMu.Unlock()
+
+	copyPath := getNextRobloxCopyPath()
+	if copyPath == "" {
+		return "", fmt.Errorf("no staging slot available")
+	}
+	if err := copyRobloxApp(copyPath); err != nil {
+		return "", err
+	}
+	return copyPath, nil
+}
+
 // LaunchPresetWithTicket launches a preset with an optional authentication ticket
 // Returns the PID of the launched process (or 0 if unknown)
 func LaunchPresetWithTicket(preset Preset, authTicket string) (int, error) {
@@ -433,8 +456,7 @@ func LaunchPresetWithTicket(preset Preset, authTicket string) (int, error) {
 	robloxApp := "/Applications/Roblox.app/Contents/MacOS/RobloxPlayer"
 	if isRobloxRunning() && authTicket != "" {
 		// For multi-instance with auth ticket, we need to copy the app
-		copyPath := getNextRobloxCopyPath()
-		if err := copyRobloxApp(copyPath); err != nil {
+		if copyPath, err := stageRobloxCopy(); err != nil {
 			// Fall back to regular launch
 			logger.LogError("Failed to copy Roblox for multi-instance, falling back to regular launch: %v", err)
 		} else {
@@ -484,8 +506,7 @@ func LaunchRobloxHomeWithAccount(cookie string) (int, error) {
 
 	// Check if Roblox is already running - need to use copied app for multi-instance
 	if isRobloxRunning() {
-		copyPath := getNextRobloxCopyPath()
-		if err := copyRobloxApp(copyPath); err != nil {
+		if copyPath, err := stageRobloxCopy(); err != nil {
 			logger.LogError("Failed to copy Roblox for multi-instance: %v", err)
 			// Fall through to use main app anyway
 		} else {

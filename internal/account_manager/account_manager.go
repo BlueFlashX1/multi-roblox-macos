@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"insadem/multi_roblox_macos/internal/atomicfile"
+	"insadem/multi_roblox_macos/internal/keychain"
 	"insadem/multi_roblox_macos/internal/logger"
 	"io/fs"
 	"os"
@@ -184,29 +185,14 @@ func GetPassword(accountID string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-// storePasswordInKeychain stores password securely in macOS Keychain with enhanced security
+// storePasswordInKeychain stores password securely in macOS Keychain.
+// Delegates to internal/keychain, which passes the secret via stdin
+// (security -i) instead of a -w argv element visible to `ps`, and round-trip
+// verifies the stored value.
 func storePasswordInKeychain(accountID, password string) error {
-	// First, try to delete existing entry (ignore errors)
-	exec.Command("security", "delete-generic-password",
-		"-s", keychainService,
-		"-a", accountID).Run()
-
-	// Add new entry with enhanced security flags
-	cmd := exec.Command("security", "add-generic-password",
-		"-s", keychainService,
-		"-a", accountID,
-		"-w", password,
-		"-T", "", // Trusted applications (empty = only this app)
-		"-U") // Update if exists
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to store password: %w (output: %s)", err, string(output))
+	if err := keychain.StoreGenericPassword(keychainService, accountID, password); err != nil {
+		return fmt.Errorf("failed to store password: %w", err)
 	}
-
-	// Clear password from memory
-	password = ""
-
 	return nil
 }
 

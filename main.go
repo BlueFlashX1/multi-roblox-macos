@@ -21,7 +21,9 @@ import (
 	"insadem/multi_roblox_macos/internal/roblox_api"
 	"insadem/multi_roblox_macos/internal/roblox_login"
 	"insadem/multi_roblox_macos/internal/roblox_session"
+	"insadem/multi_roblox_macos/internal/single_instance"
 	"insadem/multi_roblox_macos/internal/thumbnail_cache"
+	"net/url"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -50,8 +52,21 @@ func main() {
 
 	logger.LogInfo("Multi Roblox Manager started")
 
+	// Refuse to start a second copy: concurrent instances race the shared
+	// JSON config files (accounts/presets/labels) and silently discard each
+	// other's writes.
+	if err := single_instance.Acquire(); err != nil {
+		logger.LogError("%v", err)
+		exec.Command("osascript", "-e",
+			`display alert "Multi Roblox Manager" message "Another instance is already running." as critical`).Run() //nolint:errcheck — best-effort alert, we exit either way
+		return
+	}
+
 	// Cleanup old /tmp Roblox copies on startup
 	cookie_manager.CleanupTempRobloxCopies()
+
+	// Evict stale cached thumbnails (cache previously grew unbounded).
+	go thumbnail_cache.CleanupOldThumbnails(30 * 24 * time.Hour)
 
 	// Context scoped to window lifetime; cancel() is called on window close.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -298,6 +313,12 @@ func createInstancesTab(window fyne.Window, ctx context.Context) fyne.CanvasObje
 						logger.LogError("Failed to close instance %d: %v", pid, err)
 					}
 					updateInstances()
+					// Reclaim this instance's staged Roblox.app copy (~100MB)
+					// now instead of waiting for app exit. The 1s pause lets
+					// the killed process leave the ps table so the cleanup's
+					// liveness check sees it as dead.
+					time.Sleep(1 * time.Second)
+					cookie_manager.CleanupTempRobloxCopies()
 				}()
 			}
 		},
@@ -343,6 +364,10 @@ func createInstancesTab(window fyne.Window, ctx context.Context) fyne.CanvasObje
 					go func() {
 						close_all_app_instances.Close("RobloxPlayer")
 						updateInstances()
+						// Reclaim staged copies now that instances are gone
+						// (see closeButton above for the 1s rationale).
+						time.Sleep(1 * time.Second)
+						cookie_manager.CleanupTempRobloxCopies()
 					}()
 				}
 			}, window)
@@ -974,7 +999,26 @@ func launchJoinFriendViaBrowser(placeID, userID int64, window fyne.Window) {
 	// Using the experiences URL which has better join functionality
 	gameURL := fmt.Sprintf("https://www.roblox.com/games/%d", placeID)
 	logger.LogInfo("Opening game page in browser: %s (friend userID: %d)", gameURL, userID)
-	exec.Command("open", gameURL).Start()
+	if err := exec.Command("open", gameURL).Run(); err != nil {
+		logger.LogError("Failed to open game page in browser: %v", err)
+		dialog.ShowError(fmt.Errorf("Failed to open browser: %v", err), window)
+	}
+}
+
+// openPrivateServerShareURL opens the browser share link for a private-server
+// join code. Returns false (after showing an error dialog) when the browser
+// could not be opened, so callers don't show an optimistic success dialog.
+// The join code is a credential — the URL is logged hashed only.
+func openPrivateServerShareURL(linkCode string, window fyne.Window) bool {
+	shareURL := fmt.Sprintf("https://www.roblox.com/share?code=%s&type=Server", url.QueryEscape(linkCode))
+	logger.LogInfo("Opening private server share link via browser")
+	logger.LogSecret("shareLinkCode", linkCode)
+	if err := exec.Command("open", shareURL).Run(); err != nil {
+		logger.LogError("Failed to open share URL in browser: %v", err)
+		dialog.ShowError(fmt.Errorf("Failed to open browser: %v", err), window)
+		return false
+	}
+	return true
 }
 
 // saveBrowserCookieBeforeClear saves the current browser cookie to the matching account before clearing
@@ -1095,11 +1139,15 @@ See CHANGELOG.md in the source repo for full per-commit detail.`)
 		content.Wrapping = fyne.TextWrapWord
 
 		openInConsoleBtn := widget.NewButton("Open in Console.app", func() {
-			exec.Command("open", "-a", "Console", logPath).Start()
+			if err := exec.Command("open", "-a", "Console", logPath).Run(); err != nil {
+				dialog.ShowError(fmt.Errorf("Failed to open Console.app: %v", err), window)
+			}
 		})
 
 		openInFinderBtn := widget.NewButton("Reveal in Finder", func() {
-			exec.Command("open", "-R", logPath).Start()
+			if err := exec.Command("open", "-R", logPath).Run(); err != nil {
+				dialog.ShowError(fmt.Errorf("Failed to reveal in Finder: %v", err), window)
+			}
 		})
 
 		tailLogBtn := widget.NewButton("View Last 50 Lines", func() {
@@ -1473,7 +1521,10 @@ You can then switch to this account instantly when launching games!`, displayNam
 	})
 
 	openVivaldiBtn := widget.NewButton("Open Roblox Login", func() {
-		exec.Command("open", "-a", "Vivaldi", "https://www.roblox.com/login").Start()
+		if err := exec.Command("open", "-a", "Vivaldi", "https://www.roblox.com/login").Run(); err != nil {
+			logger.LogError("Failed to open Vivaldi login page: %v", err)
+			dialog.ShowError(fmt.Errorf("Failed to open Vivaldi: %v", err), window)
+		}
 	})
 
 	buttonBox := container.NewHBox(
@@ -2061,9 +2112,9 @@ func showAccountSelectionForPreset(window fyne.Window, preset preset_manager.Pre
 											}
 
 											// Open private server via browser
-											shareURL := fmt.Sprintf("https://www.roblox.com/share?code=%s&type=Server", preset.PrivateServerLinkCode)
-											logger.LogInfo("Opening private server via browser: %s", shareURL)
-											exec.Command("open", shareURL).Start()
+											if !openPrivateServerShareURL(preset.PrivateServerLinkCode, window) {
+												return
+											}
 
 											preset_manager.UpdatePresetLastAccount(presetIndex, account.ID)
 											customDialog.Hide()
@@ -2079,9 +2130,9 @@ func showAccountSelectionForPreset(window fyne.Window, preset preset_manager.Pre
 								}
 
 								// Browser matches or no session - just open
-								shareURL := fmt.Sprintf("https://www.roblox.com/share?code=%s&type=Server", preset.PrivateServerLinkCode)
-								logger.LogInfo("Opening private server via browser: %s", shareURL)
-								exec.Command("open", shareURL).Start()
+								if !openPrivateServerShareURL(preset.PrivateServerLinkCode, window) {
+									return
+								}
 
 								preset_manager.UpdatePresetLastAccount(presetIndex, account.ID)
 								customDialog.Hide()
@@ -2162,8 +2213,9 @@ func showAccountSelectionForPreset(window fyne.Window, preset preset_manager.Pre
 									logger.LogInfo("Cleared Vivaldi Roblox cookies for account switch")
 								}
 
-								shareURL := fmt.Sprintf("https://www.roblox.com/share?code=%s&type=Server", preset.PrivateServerLinkCode)
-								exec.Command("open", shareURL).Start()
+								if !openPrivateServerShareURL(preset.PrivateServerLinkCode, window) {
+									return
+								}
 
 								preset_manager.UpdatePresetLastAccount(presetIndex, account.ID)
 								customDialog.Hide()
@@ -2179,8 +2231,9 @@ func showAccountSelectionForPreset(window fyne.Window, preset preset_manager.Pre
 					}
 
 					// Browser matches or no session
-					shareURL := fmt.Sprintf("https://www.roblox.com/share?code=%s&type=Server", preset.PrivateServerLinkCode)
-					exec.Command("open", shareURL).Start()
+					if !openPrivateServerShareURL(preset.PrivateServerLinkCode, window) {
+						return
+					}
 
 					preset_manager.UpdatePresetLastAccount(presetIndex, account.ID)
 					customDialog.Hide()
@@ -2249,9 +2302,9 @@ func showAccountSelectionForPreset(window fyne.Window, preset preset_manager.Pre
 
 		if usePrivateServer && preset.PrivateServerLinkCode != "" {
 			// Open private server via browser
-			shareURL := fmt.Sprintf("https://www.roblox.com/share?code=%s&type=Server", preset.PrivateServerLinkCode)
-			logger.LogInfo("Opening private server via browser: %s", shareURL)
-			exec.Command("open", shareURL).Start()
+			if !openPrivateServerShareURL(preset.PrivateServerLinkCode, window) {
+				return
+			}
 
 			customDialog.Hide()
 			launchCallback()
