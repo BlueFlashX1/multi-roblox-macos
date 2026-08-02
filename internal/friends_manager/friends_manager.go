@@ -3,6 +3,7 @@ package friends_manager
 import (
 	"encoding/json"
 	"fmt"
+	"insadem/multi_roblox_macos/internal/atomicfile"
 	"insadem/multi_roblox_macos/internal/logger"
 	"os"
 	"path/filepath"
@@ -98,7 +99,8 @@ func SaveFriends(friends []Friend) error {
 		return err
 	}
 
-	return os.WriteFile(configPath, data, 0600) // Secure permissions - owner only
+	// Atomic write — crash-safe, see internal/atomicfile.
+	return atomicfile.WriteFile(configPath, data, 0600) // Secure permissions - owner only
 }
 
 // AddFriend adds a new friend

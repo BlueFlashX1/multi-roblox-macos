@@ -2,9 +2,17 @@ package label_manager
 
 import (
 	"encoding/json"
+	"insadem/multi_roblox_macos/internal/atomicfile"
 	"os"
 	"path/filepath"
+	"sync"
 )
+
+// mu serializes every load→modify→save cycle on labels.json. Without it the
+// 2s updateInstances ticker (CleanupStaleLabels) races UI callbacks (SetLabel)
+// and the last writer silently discards the other's change. Same pattern as
+// instance_account_tracker.
+var mu sync.Mutex
 
 // InstanceLabel represents a label for a Roblox instance
 type InstanceLabel struct {
@@ -31,8 +39,8 @@ func GetConfigPath() (string, error) {
 	return filepath.Join(configDir, "labels.json"), nil
 }
 
-// LoadLabels loads instance labels from config file
-func LoadLabels() ([]InstanceLabel, error) {
+// loadLabelsLocked reads labels from disk. Caller MUST hold mu.
+func loadLabelsLocked() ([]InstanceLabel, error) {
 	configPath, err := GetConfigPath()
 	if err != nil {
 		return nil, err
@@ -56,8 +64,8 @@ func LoadLabels() ([]InstanceLabel, error) {
 	return config.Labels, nil
 }
 
-// SaveLabels saves instance labels to config file
-func SaveLabels(labels []InstanceLabel) error {
+// saveLabelsLocked persists labels to disk. Caller MUST hold mu.
+func saveLabelsLocked(labels []InstanceLabel) error {
 	configPath, err := GetConfigPath()
 	if err != nil {
 		return err
@@ -69,12 +77,30 @@ func SaveLabels(labels []InstanceLabel) error {
 		return err
 	}
 
-	return os.WriteFile(configPath, data, 0600) // Secure permissions - owner only
+	// Atomic write — crash-safe, see internal/atomicfile.
+	return atomicfile.WriteFile(configPath, data, 0600) // Secure permissions - owner only
+}
+
+// LoadLabels loads instance labels from config file (public API, acquires lock).
+func LoadLabels() ([]InstanceLabel, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	return loadLabelsLocked()
+}
+
+// SaveLabels saves instance labels to config file (public API, acquires lock).
+func SaveLabels(labels []InstanceLabel) error {
+	mu.Lock()
+	defer mu.Unlock()
+	return saveLabelsLocked(labels)
 }
 
 // GetLabel returns the label for a specific PID
 func GetLabel(pid int) (InstanceLabel, bool) {
-	labels, err := LoadLabels()
+	mu.Lock()
+	defer mu.Unlock()
+
+	labels, err := loadLabelsLocked()
 	if err != nil {
 		return InstanceLabel{}, false
 	}
@@ -90,7 +116,10 @@ func GetLabel(pid int) (InstanceLabel, bool) {
 
 // SetLabel sets or updates a label for a PID
 func SetLabel(pid int, labelText, color string) error {
-	labels, err := LoadLabels()
+	mu.Lock()
+	defer mu.Unlock()
+
+	labels, err := loadLabelsLocked()
 	if err != nil {
 		return err
 	}
@@ -114,12 +143,15 @@ func SetLabel(pid int, labelText, color string) error {
 		})
 	}
 
-	return SaveLabels(labels)
+	return saveLabelsLocked(labels)
 }
 
 // DeleteLabel removes a label for a PID
 func DeleteLabel(pid int) error {
-	labels, err := LoadLabels()
+	mu.Lock()
+	defer mu.Unlock()
+
+	labels, err := loadLabelsLocked()
 	if err != nil {
 		return err
 	}
@@ -131,12 +163,15 @@ func DeleteLabel(pid int) error {
 		}
 	}
 
-	return SaveLabels(newLabels)
+	return saveLabelsLocked(newLabels)
 }
 
 // CleanupStaleLabels removes labels for PIDs that no longer exist
 func CleanupStaleLabels(activePIDs []int) error {
-	labels, err := LoadLabels()
+	mu.Lock()
+	defer mu.Unlock()
+
+	labels, err := loadLabelsLocked()
 	if err != nil {
 		return err
 	}
@@ -153,7 +188,7 @@ func CleanupStaleLabels(activePIDs []int) error {
 		}
 	}
 
-	return SaveLabels(newLabels)
+	return saveLabelsLocked(newLabels)
 }
 
 // DefaultColors returns a list of default label colors

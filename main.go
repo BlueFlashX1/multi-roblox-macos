@@ -364,9 +364,18 @@ func createPresetsTab(window fyne.Window) fyne.CanvasObject {
 	}
 	var presetList *widget.List
 
+	// presetsMu guards the presets slice, which is reassigned from background
+	// goroutines (Add Preset fetch) while the list's Length/UpdateItem callbacks
+	// read it on the render thread — same pattern as instancesMu above.
+	var presetsMu sync.RWMutex
+
 	// Preset list with card layout
 	presetList = widget.NewList(
-		func() int { return len(presets) },
+		func() int {
+			presetsMu.RLock()
+			defer presetsMu.RUnlock()
+			return len(presets)
+		},
 		func() fyne.CanvasObject {
 			// Create card-style layout with thumbnail using HBox for predictable structure
 			thumbnail := canvas.NewImageFromFile("")
@@ -400,11 +409,13 @@ func createPresetsTab(window fyne.Window) fyne.CanvasObject {
 			)
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
+			presetsMu.RLock()
 			if id >= len(presets) {
+				presetsMu.RUnlock()
 				return
 			}
-
 			preset := presets[id]
+			presetsMu.RUnlock()
 			hbox := obj.(*fyne.Container)
 
 			thumbnail := hbox.Objects[0].(*canvas.Image)
@@ -468,7 +479,9 @@ func createPresetsTab(window fyne.Window) fyne.CanvasObject {
 					if updated, loadErr := preset_manager.LoadPresets(); loadErr != nil {
 						logger.LogError("Failed to reload presets after settings: %v", loadErr)
 					} else {
+						presetsMu.Lock()
 						presets = updated
+						presetsMu.Unlock()
 					}
 					presetList.Refresh()
 				})
@@ -483,7 +496,9 @@ func createPresetsTab(window fyne.Window) fyne.CanvasObject {
 							if updated, loadErr := preset_manager.LoadPresets(); loadErr != nil {
 								logger.LogError("Failed to reload presets after delete: %v", loadErr)
 							} else {
+								presetsMu.Lock()
 								presets = updated
+								presetsMu.Unlock()
 							}
 							presetList.Refresh()
 						}
@@ -528,8 +543,16 @@ func createPresetsTab(window fyne.Window) fyne.CanvasObject {
 
 				// Add preset (will auto-fetch if name is empty)
 				go func() {
-					preset_manager.AddPreset(nameEntry.Text, urlEntry.Text)
-					presets, _ = preset_manager.LoadPresets()
+					if err := preset_manager.AddPreset(nameEntry.Text, urlEntry.Text); err != nil {
+						logger.LogError("Failed to add preset: %v", err)
+					}
+					if updated, loadErr := preset_manager.LoadPresets(); loadErr != nil {
+						logger.LogError("Failed to reload presets after add: %v", loadErr)
+					} else {
+						presetsMu.Lock()
+						presets = updated
+						presetsMu.Unlock()
+					}
 					progress.Hide()
 					presetList.Refresh()
 				}()

@@ -315,15 +315,23 @@ func SetRobloxCookie(cookie *RobloxCookie) error {
 	nowMicros := time.Now().Sub(windowsEpoch).Microseconds()
 	expiresUTC := time.Now().Add(365 * 24 * time.Hour).Sub(windowsEpoch).Microseconds()
 
-	// Delete existing cookie
-	_, err = db.Exec(`DELETE FROM cookies WHERE host_key = '.roblox.com' AND name = '.ROBLOSECURITY'`)
+	// DELETE + INSERT must be one transaction: a crash between the two used to
+	// permanently wipe the existing .ROBLOSECURITY cookie with no replacement.
+	tx, err := db.Begin()
 	if err != nil {
-		logger.LogError("Failed to delete existing cookie: %v", err)
+		return fmt.Errorf("failed to begin cookie transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck — no-op after successful Commit
+
+	// Delete existing cookie
+	_, err = tx.Exec(`DELETE FROM cookies WHERE host_key = '.roblox.com' AND name = '.ROBLOSECURITY'`)
+	if err != nil {
+		return fmt.Errorf("failed to delete existing cookie: %w", err)
 	}
 
 	// Insert new cookie using Vivaldi's actual schema
 	// Note: We use the plain 'value' column - Vivaldi will work with unencrypted cookies
-	_, err = db.Exec(`INSERT INTO cookies (
+	_, err = tx.Exec(`INSERT INTO cookies (
 		creation_utc, host_key, top_frame_site_key, name, value, encrypted_value,
 		path, expires_utc, is_secure, is_httponly, last_access_utc, has_expires,
 		is_persistent, priority, samesite, source_scheme, source_port,
@@ -353,6 +361,10 @@ func SetRobloxCookie(cookie *RobloxCookie) error {
 
 	if err != nil {
 		return fmt.Errorf("failed to insert cookie: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit cookie transaction: %w", err)
 	}
 
 	logger.LogInfo("Successfully set .ROBLOSECURITY cookie in Vivaldi")

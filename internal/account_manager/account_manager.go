@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"insadem/multi_roblox_macos/internal/atomicfile"
 	"insadem/multi_roblox_macos/internal/logger"
 	"io/fs"
 	"os"
@@ -85,7 +86,9 @@ func SaveAccounts(accounts []Account) error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0600)
+	// Atomic write: a crash during a plain WriteFile truncates accounts.json,
+	// which orphans every Keychain password behind an unparseable file.
+	return atomicfile.WriteFile(path, data, 0600)
 }
 
 // generateUniqueID creates a unique account ID using timestamp + random bytes.
@@ -152,6 +155,13 @@ func AddAccount(username, password, label string) error {
 	accounts = append(accounts, account)
 	if err := SaveAccounts(accounts); err != nil {
 		logger.LogError("Failed to save accounts: %v", err)
+		// Roll back the Keychain entry stored above — otherwise it is orphaned
+		// with no accounts.json record pointing at it.
+		if password != "" {
+			exec.Command("security", "delete-generic-password",
+				"-s", keychainService,
+				"-a", id).Run() //nolint:errcheck — best-effort rollback
+		}
 		return err
 	}
 
@@ -227,6 +237,16 @@ func DeleteAccount(accountID string) error {
 		}
 	}
 
+	// Persist the removal BEFORE touching the Keychain. In the old order a
+	// failed SaveAccounts left the account visible in accounts.json with its
+	// Keychain password already destroyed — unrecoverable credential loss.
+	// This order can at worst leave an orphaned Keychain entry, which is
+	// harmless and retried on the next delete.
+	if err := SaveAccounts(newAccounts); err != nil {
+		logger.LogError("Failed to save accounts after deletion: %v", err)
+		return err
+	}
+
 	// Delete password from keychain
 	if err := exec.Command("security", "delete-generic-password",
 		"-s", keychainService,
@@ -234,11 +254,6 @@ func DeleteAccount(accountID string) error {
 		logger.LogDebug("Keychain entry deletion returned: %v (may not exist)", err)
 	} else {
 		logger.LogDebug("Password removed from keychain for ID: %s", accountID)
-	}
-
-	if err := SaveAccounts(newAccounts); err != nil {
-		logger.LogError("Failed to save accounts after deletion: %v", err)
-		return err
 	}
 
 	logger.LogInfo("Account deleted successfully: %s (ID: %s)", deletedUsername, accountID)

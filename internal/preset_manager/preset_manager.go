@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"insadem/multi_roblox_macos/internal/atomicfile"
 	"insadem/multi_roblox_macos/internal/logger"
 	"insadem/multi_roblox_macos/internal/roblox_api"
 	"io/fs"
@@ -12,8 +13,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
+
+// mu serializes every load→modify→save cycle on presets.json. main.go calls
+// UpdatePresetLastAccount from parallel per-account launch goroutines; without
+// the lock, concurrent cycles silently discard each other's writes. Same
+// pattern as instance_account_tracker.
+var mu sync.Mutex
 
 // timeNowMillis returns current time in milliseconds
 func timeNowMillis() int64 {
@@ -48,8 +56,8 @@ func GetConfigPath() (string, error) {
 	return filepath.Join(configDir, "presets.json"), nil
 }
 
-// LoadPresets loads presets from config file
-func LoadPresets() ([]Preset, error) {
+// loadPresetsLocked reads presets from disk. Caller MUST hold mu.
+func loadPresetsLocked() ([]Preset, error) {
 	configPath, err := GetConfigPath()
 	if err != nil {
 		return nil, err
@@ -77,8 +85,8 @@ func LoadPresets() ([]Preset, error) {
 	return config.Presets, nil
 }
 
-// SavePresets saves presets to config file
-func SavePresets(presets []Preset) error {
+// savePresetsLocked persists presets to disk. Caller MUST hold mu.
+func savePresetsLocked(presets []Preset) error {
 	configPath, err := GetConfigPath()
 	if err != nil {
 		return err
@@ -90,16 +98,29 @@ func SavePresets(presets []Preset) error {
 		return err
 	}
 
-	return os.WriteFile(configPath, data, 0600) // Secure permissions - owner only
+	// Atomic write — crash-safe, see internal/atomicfile.
+	return atomicfile.WriteFile(configPath, data, 0600) // Secure permissions - owner only
+}
+
+// LoadPresets loads presets from config file (public API, acquires lock).
+func LoadPresets() ([]Preset, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	return loadPresetsLocked()
+}
+
+// SavePresets saves presets to config file (public API, acquires lock).
+func SavePresets(presets []Preset) error {
+	mu.Lock()
+	defer mu.Unlock()
+	return savePresetsLocked(presets)
 }
 
 // AddPreset adds a new preset with auto-fetched game info
 func AddPreset(name, url string) error {
-	presets, err := LoadPresets()
-	if err != nil {
-		return err
-	}
-
+	// Build the preset (including network fetches) BEFORE taking the lock —
+	// holding mu across a Roblox API call would block every other preset
+	// operation for up to the HTTP timeout.
 	preset := Preset{Name: name, URL: url}
 
 	// Try to extract private server link code if present
@@ -122,8 +143,16 @@ func AddPreset(name, url string) error {
 		}
 	}
 
+	mu.Lock()
+	defer mu.Unlock()
+
+	presets, err := loadPresetsLocked()
+	if err != nil {
+		return err
+	}
+
 	presets = append(presets, preset)
-	return SavePresets(presets)
+	return savePresetsLocked(presets)
 }
 
 // ExtractPrivateServerLinkCode extracts the link code from a private server URL
@@ -134,12 +163,13 @@ func AddPreset(name, url string) error {
 // - Direct code paste: XXXXX
 func ExtractPrivateServerLinkCode(input string) string {
 	input = strings.TrimSpace(input)
-	logger.LogDebug("Extracting private server link code from: %s", input)
+	// The input may itself contain a join code — never log it raw.
+	logger.LogDebug("Extracting private server link code (input len=%d)", len(input))
 
 	// If it looks like just a code (no URL characters), return it directly
 	if !strings.Contains(input, "/") && !strings.Contains(input, "?") && !strings.Contains(input, "=") {
 		if len(input) > 10 && len(input) < 50 {
-			logger.LogDebug("Input looks like a direct code: %s", input)
+			logger.LogDebug("Input looks like a direct code")
 			return input
 		}
 	}
@@ -153,7 +183,7 @@ func ExtractPrivateServerLinkCode(input string) string {
 				code = code[:idx]
 			}
 			code = strings.TrimSpace(code)
-			logger.LogDebug("Found privateServerLinkCode: %s", code)
+			logger.LogSecret("privateServerLinkCode", code)
 			return code
 		}
 	}
@@ -167,7 +197,7 @@ func ExtractPrivateServerLinkCode(input string) string {
 				code = code[:idx]
 			}
 			code = strings.TrimSpace(code)
-			logger.LogDebug("Found linkCode: %s", code)
+			logger.LogSecret("linkCode", code)
 			return code
 		}
 	}
@@ -181,7 +211,7 @@ func ExtractPrivateServerLinkCode(input string) string {
 				code = code[:idx]
 			}
 			code = strings.TrimSpace(code)
-			logger.LogDebug("Found code: %s", code)
+			logger.LogSecret("shareCode", code)
 			return code
 		}
 	}
@@ -192,7 +222,10 @@ func ExtractPrivateServerLinkCode(input string) string {
 
 // UpdatePresetPrivateServer updates the private server link code for a preset
 func UpdatePresetPrivateServer(index int, linkCode string) error {
-	presets, err := LoadPresets()
+	mu.Lock()
+	defer mu.Unlock()
+
+	presets, err := loadPresetsLocked()
 	if err != nil {
 		return err
 	}
@@ -203,12 +236,15 @@ func UpdatePresetPrivateServer(index int, linkCode string) error {
 
 	presets[index].PrivateServerLinkCode = linkCode
 	logger.LogInfo("Updated preset %d private server link code", index)
-	return SavePresets(presets)
+	return savePresetsLocked(presets)
 }
 
 // UpdatePresetLastAccount updates the last used account for a preset
 func UpdatePresetLastAccount(index int, accountID string) error {
-	presets, err := LoadPresets()
+	mu.Lock()
+	defer mu.Unlock()
+
+	presets, err := loadPresetsLocked()
 	if err != nil {
 		return err
 	}
@@ -218,12 +254,15 @@ func UpdatePresetLastAccount(index int, accountID string) error {
 	}
 
 	presets[index].LastAccountUsed = accountID
-	return SavePresets(presets)
+	return savePresetsLocked(presets)
 }
 
 // DeletePreset removes a preset by index
 func DeletePreset(index int) error {
-	presets, err := LoadPresets()
+	mu.Lock()
+	defer mu.Unlock()
+
+	presets, err := loadPresetsLocked()
 	if err != nil {
 		return err
 	}
@@ -233,7 +272,7 @@ func DeletePreset(index int) error {
 	}
 
 	presets = append(presets[:index], presets[index+1:]...)
-	return SavePresets(presets)
+	return savePresetsLocked(presets)
 }
 
 // LaunchPreset launches Roblox with the URL from a preset
@@ -311,7 +350,8 @@ func copyRobloxApp(destPath string) error {
 // Returns the PID of the launched process (or 0 if unknown)
 func LaunchPresetWithTicket(preset Preset, authTicket string) (int, error) {
 	logger.LogInfo("LaunchPresetWithTicket called for: %s", preset.Name)
-	logger.LogDebug("Preset URL: %s", preset.URL)
+	// Preset URLs can embed private-server link codes — log hashed only.
+	logger.LogSecret("presetURL", preset.URL)
 	logger.LogDebug("Preset PlaceID: %d", preset.PlaceID)
 	if authTicket != "" {
 		logger.LogDebug("Using auth ticket (length: %d)", len(authTicket))
@@ -337,7 +377,10 @@ func LaunchPresetWithTicket(preset Preset, authTicket string) (int, error) {
 		// Check if launching to private server
 		if preset.PrivateServerLinkCode != "" {
 			linkCode := preset.PrivateServerLinkCode
-			logger.LogInfo("Attempting private server launch with code: %s...", linkCode[:min(10, len(linkCode))])
+			// The link code is a credential (grants private-server access) —
+			// log hashed only, per the logger package convention.
+			logger.LogInfo("Attempting private server launch")
+			logger.LogSecret("privateServerLinkCode", linkCode)
 
 			// Use the share link resolution approach - PlaceLauncher with share code
 			// Try request=RequestPrivateGame with the share code as linkCode

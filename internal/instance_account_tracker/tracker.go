@@ -3,6 +3,7 @@ package instance_account_tracker
 import (
 	"encoding/json"
 	"fmt"
+	"insadem/multi_roblox_macos/internal/atomicfile"
 	"os"
 	"path/filepath"
 	"sync"
@@ -76,7 +77,8 @@ func saveMappingsLocked(maps []InstanceAccountMap) error {
 	}
 
 	mapping = maps
-	return os.WriteFile(path, data, 0600)
+	// Atomic write — crash-safe, see internal/atomicfile.
+	return atomicfile.WriteFile(path, data, 0600)
 }
 
 // LoadMappings loads instance-account mappings from disk (public API, acquires lock).
