@@ -287,10 +287,18 @@ func createInstancesTab(window fyne.Window, ctx context.Context) fyne.CanvasObje
 				showLabelDialog(window, instance.PID, updateInstances)
 			}
 
-			// Close button
+			// Close button — run off the main thread: ForceKillProcess sleeps
+			// 500ms between SIGTERM and the SIGKILL check, which froze the
+			// whole UI when called synchronously. updateInstances is
+			// goroutine-safe (see its doc comment above).
 			closeButton.OnTapped = func() {
-				instance_manager.CloseInstance(instance.PID)
-				updateInstances()
+				pid := instance.PID
+				go func() {
+					if err := instance_manager.CloseInstance(pid); err != nil {
+						logger.LogError("Failed to close instance %d: %v", pid, err)
+					}
+					updateInstances()
+				}()
 			}
 		},
 	)
@@ -330,8 +338,12 @@ func createInstancesTab(window fyne.Window, ctx context.Context) fyne.CanvasObje
 			fmt.Sprintf("This will close %d running instance(s). Continue?", count),
 			func(yes bool) {
 				if yes {
-					close_all_app_instances.Close("RobloxPlayer")
-					updateInstances()
+					// Off the main thread: Close now force-kills gracefully,
+					// sleeping 500ms per process (see closeButton above).
+					go func() {
+						close_all_app_instances.Close("RobloxPlayer")
+						updateInstances()
+					}()
 				}
 			}, window)
 	})
@@ -1643,8 +1655,13 @@ func showAccountSelectionDialog(window fyne.Window, launchCallback func()) {
 	customDialog := dialog.NewCustomWithoutButtons("Launch New Instance", content, window)
 
 	// Validate cookies asynchronously — dialog is already visible.
-	// Each goroutine updates the binding for its slot; once all are done
-	// the Select options are refreshed on the main thread.
+	// Each goroutine updates the binding for its slot, then rebuilds the
+	// options under optionsMu so concurrent validators don't interleave.
+	// NOTE: Fyne v2.4 has no goroutine-safe Select accessor — SetOptions is a
+	// bare field write + Refresh (verified in widget/select.go); the mutex
+	// serializes our writers, and the launch button below resolves the
+	// selection against static data instead of the live Options slice.
+	var optionsMu sync.Mutex
 	for i, acc := range accounts {
 		i, acc := i, acc // capture for goroutine
 		go func() {
@@ -1662,9 +1679,7 @@ func showAccountSelectionDialog(window fyne.Window, launchCallback func()) {
 			}
 			statusBindings[i].Set(newText) //nolint:errcheck
 
-			// Rebuild options slice and update Select widget.
-			// SetOptions is the goroutine-safe accessor in Fyne v2;
-			// direct field assignment (selectWidget.Options = ...) is not.
+			optionsMu.Lock()
 			updatedOpts := make([]string, len(accounts)+1)
 			updatedOpts[0] = "Launch without account (opens Roblox home)"
 			for j := range accounts {
@@ -1672,22 +1687,38 @@ func showAccountSelectionDialog(window fyne.Window, launchCallback func()) {
 				updatedOpts[j+1] = v
 			}
 			selectWidget.SetOptions(updatedOpts)
+			optionsMu.Unlock()
 		}()
 	}
 
 	// Launch button
 	launchBtn := widget.NewButton("🚀 Launch Instance", func() {
-		// Match against the live Options slice (may differ from initial options
-		// after async status updates have run).
+		// Resolve the selection against the STATIC baseTexts slice, never the
+		// live selectWidget.Options that the validation goroutines above are
+		// still mutating. Every option for slot i is one of a closed set of
+		// status variants wrapped around the immutable base text, so exact
+		// matching stays correct even when Selected holds a stale variant.
+		selected := selectWidget.Selected
 		selectedIndex := -1
-		for i, opt := range selectWidget.Options {
-			if opt == selectWidget.Selected {
-				selectedIndex = i
-				break
+		if selected == "Launch without account (opens Roblox home)" {
+			selectedIndex = 0
+		} else {
+			for i, base := range baseTexts {
+				switch selected {
+				case "🔄 " + base + " (checking…)",
+					"✅ " + base,
+					"❌ " + base + " (expired)",
+					"⚪ " + base + " (no cookie)",
+					"⚠️ " + base:
+					selectedIndex = i + 1
+				}
+				if selectedIndex != -1 {
+					break
+				}
 			}
 		}
 
-		logger.LogDebug("Selected index: %d, option: %s", selectedIndex, selectWidget.Selected)
+		logger.LogDebug("Selected index: %d, option: %s", selectedIndex, selected)
 
 		if selectedIndex == 0 {
 			logger.LogInfo("Launching new instance without account")

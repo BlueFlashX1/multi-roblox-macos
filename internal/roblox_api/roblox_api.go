@@ -1,6 +1,7 @@
 package roblox_api
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -38,6 +39,40 @@ var secureHTTPClient = &http.Client{
 			MinVersion: tls.VersionTLS12,
 		},
 	},
+}
+
+// postJSONWithCSRFRetry sends an authenticated JSON POST and performs Roblox's
+// CSRF handshake: protected endpoints reject the first attempt with 403 plus an
+// x-csrf-token response header, and the request must be retried once with that
+// token (same dance as cookie_manager's GetAuthTicket). The caller owns closing
+// the returned response body.
+func postJSONWithCSRFRetry(apiURL string, payload []byte, cookie string) (*http.Response, error) {
+	send := func(csrf string) (*http.Response, error) {
+		req, err := http.NewRequest("POST", apiURL, bytes.NewReader(payload))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if cookie != "" {
+			req.Header.Set("Cookie", ".ROBLOSECURITY="+cookie)
+		}
+		if csrf != "" {
+			req.Header.Set("X-CSRF-TOKEN", csrf)
+		}
+		return secureHTTPClient.Do(req)
+	}
+
+	resp, err := send("")
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		if csrf := resp.Header.Get("x-csrf-token"); csrf != "" {
+			resp.Body.Close() //nolint:errcheck — discarding the 403 challenge body
+			return send(csrf)
+		}
+	}
+	return resp, nil
 }
 
 // ExtractPlaceID extracts Place ID from various Roblox URL formats
@@ -252,9 +287,17 @@ func LookupUserByUsername(username string) (*UserInfo, error) {
 	// Use the users API to look up by username
 	apiURL := "https://users.roblox.com/v1/usernames/users"
 
-	payload := fmt.Sprintf(`{"usernames":["%s"],"excludeBannedUsers":false}`, username)
+	// json.Marshal, not Sprintf: a username containing " or \ must be escaped,
+	// not spliced raw into the JSON body.
+	payload, err := json.Marshal(struct {
+		Usernames          []string `json:"usernames"`
+		ExcludeBannedUsers bool     `json:"excludeBannedUsers"`
+	}{Usernames: []string{username}})
+	if err != nil {
+		return nil, err
+	}
 
-	req, err := http.NewRequest("POST", apiURL, strings.NewReader(payload))
+	req, err := http.NewRequest("POST", apiURL, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
@@ -446,18 +489,16 @@ func ResolveShareLink(shareCode string, cookie string) (*ShareLinkInfo, error) {
 	// Try the share-links API
 	apiURL := "https://apis.roblox.com/share-links/v1/resolve-link"
 
-	payload := fmt.Sprintf(`{"linkId":"%s","linkType":"Server"}`, shareCode)
-
-	req, err := http.NewRequest("POST", apiURL, strings.NewReader(payload))
+	// json.Marshal, not Sprintf: share codes are user-pasted input.
+	payload, err := json.Marshal(struct {
+		LinkID   string `json:"linkId"`
+		LinkType string `json:"linkType"`
+	}{LinkID: shareCode, LinkType: "Server"})
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if cookie != "" {
-		req.Header.Set("Cookie", ".ROBLOSECURITY="+cookie)
-	}
 
-	resp, err := secureHTTPClient.Do(req)
+	resp, err := postJSONWithCSRFRetry(apiURL, payload, cookie)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve share link: %w", err)
 	}
@@ -516,20 +557,18 @@ func ResolveShareLink(shareCode string, cookie string) (*ShareLinkInfo, error) {
 // This is an alternative approach that mimics what the browser does
 func GetPrivateServerJoinScript(placeID int64, accessCode string, cookie string) (string, error) {
 	// Try using the games API to get join info
-	apiURL := fmt.Sprintf("https://gamejoin.roblox.com/v1/join-private-game")
+	apiURL := "https://gamejoin.roblox.com/v1/join-private-game"
 
-	payload := fmt.Sprintf(`{"placeId":%d,"accessCode":"%s"}`, placeID, accessCode)
-
-	req, err := http.NewRequest("POST", apiURL, strings.NewReader(payload))
+	// json.Marshal, not Sprintf: access codes are user-supplied input.
+	payload, err := json.Marshal(struct {
+		PlaceID    int64  `json:"placeId"`
+		AccessCode string `json:"accessCode"`
+	}{PlaceID: placeID, AccessCode: accessCode})
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if cookie != "" {
-		req.Header.Set("Cookie", ".ROBLOSECURITY="+cookie)
-	}
 
-	resp, err := secureHTTPClient.Do(req)
+	resp, err := postJSONWithCSRFRetry(apiURL, payload, cookie)
 	if err != nil {
 		return "", fmt.Errorf("failed to get join script: %w", err)
 	}
