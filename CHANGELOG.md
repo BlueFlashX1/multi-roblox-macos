@@ -6,6 +6,42 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 
 ---
 
+## [3.3.0] — 2026-08-02
+
+Data-safety + stability release. 20 bugs from a three-agent audit fixed across 4 fix commits, followed by an adversarial verification pass over the full diff.
+
+### Data safety (critical)
+
+- **`DeleteAccount` ordering** (`c2b94d1`) — accounts.json is persisted *before* the Keychain entry is deleted; a failed save previously destroyed the password permanently. `AddAccount` now rolls back its Keychain entry if the save fails.
+- **Vivaldi cookie swap transactional** (`c2b94d1`) — `SetRobloxCookie`'s DELETE+INSERT runs in one SQL transaction; a crash mid-swap can no longer wipe the browser's `.ROBLOSECURITY` cookie.
+- **Atomic config writes** (`c2b94d1`) — new `internal/atomicfile` (temp file + rename, tested); accounts, friends, presets, labels, and instance-tracker stores can no longer be truncated to corrupt JSON by a crash.
+- **Load-modify-save races closed** (`c2b94d1`) — `label_manager` and `preset_manager` gained package mutexes (same pattern as `instance_account_tracker`); the 2s cleanup ticker and parallel launch goroutines no longer silently discard each other's writes. The `presets` UI slice is mutex-guarded.
+
+### Correctness
+
+- **CSRF retry** (`9f170d0`) — `ResolveShareLink` / `GetPrivateServerJoinScript` perform Roblox's X-CSRF-TOKEN 403 handshake; previously they could never succeed.
+- **JSON body escaping** (`9f170d0`) — user-pasted usernames/share codes are `json.Marshal`ed, not `fmt.Sprintf`-spliced.
+- **Launch-dialog dropdown race** (`9f170d0`) — selection resolves against static account data instead of the live `Select.Options` mutated by validation goroutines; false "SetOptions is goroutine-safe" comment corrected.
+- **Staged-copy slot safety** (`0d68bfc`, `a29381c`) — slot reclaim liveness-checks `ps` before deleting (never corrupts a running instance's binary); slot-pick+copy is serialized, closing the double-launch TOCTOU.
+
+### UX / stability
+
+- **UI freezes removed** (`9f170d0`) — Close / Close All run off the main thread (each kill sleeps 500ms); Close All uses graceful SIGTERM→SIGKILL and logs failures.
+- **Launch error surfacing** (`a29381c`) — all 9 unchecked `open`/launch sites now show a real error dialog instead of an optimistic success message.
+- **Discord link fetch** (`9f170d0`) — 5s timeout + status check; a hung or 404 gist can no longer block the UI or poison the cached invite link.
+
+### Security
+
+- **Keychain secrets off argv** (`a29381c`) — new `internal/keychain` feeds secrets to `security -i` via stdin (argv is world-readable via `ps`); every store is round-trip verified with rollback on mismatch.
+- **Join-code log leaks closed** (`c2b94d1`, `a29381c`) — private-server link codes and code-bearing URLs log hashed (`LogSecret`) everywhere.
+- **Single-instance guard** (`a29381c`) — startup `flock` prevents a second app copy from racing the shared config files.
+
+### Housekeeping
+
+- **Thumbnail cache eviction** (`a29381c`) — entries older than 30 days removed at startup; staged Roblox.app copies (~100MB each) reclaimed on instance close instead of only at app exit.
+
+---
+
 ## [3.2.0] — 2026-05-16
 
 Security + correctness release. ~18 commits across 3 TIER-prioritized batches with 2 independent audit rounds (Go-reviewer + security-reviewer + general code-reviewer agents).

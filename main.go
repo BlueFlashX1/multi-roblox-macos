@@ -1094,7 +1094,7 @@ func createAboutTab(window fyne.Window) fyne.CanvasObject {
 	title.TextStyle = fyne.TextStyle{Bold: true}
 	title.Alignment = fyne.TextAlignCenter
 
-	version := widget.NewLabel("Version 3.2.0")
+	version := widget.NewLabel("Version 3.3.0")
 	version.Alignment = fyne.TextAlignCenter
 
 	description := widget.NewLabel(`Run multiple Roblox accounts simultaneously on macOS!
@@ -1113,15 +1113,17 @@ How it works:
 3. Click "Capture" to save the session cookie
 4. Use Presets or New Instance to launch with any account!
 
-What's new in 3.2.0 — security + correctness release:
-- Eliminated cookie/secret leakage paths (subprocess args, log files,
-  error dialogs, /tmp staging, HTTPStorages writes)
-- Pinned Python dependencies; removed system-wide install fallback;
-  consent surfaced to log
-- Fixed mutex deadlock that froze multi-instance launches
-- Async cookie validation — "New Instance" no longer freezes the UI
-- ~120 LOC of dead code removed; typed Roblox API responses
-- Audited by three independent reviewers across two rounds; 18 commits
+What's new in 3.3.0 — data-safety + stability release:
+- Account deletion can no longer destroy a Keychain password when the
+  save fails; Vivaldi cookie swaps are transactional
+- All config files (accounts, presets, labels, friends) write atomically
+  — a crash can no longer wipe your lists
+- Keychain secrets no longer visible to other processes via ps
+- Fixed silent data-loss races between background cleanup and UI edits
+- Close buttons no longer freeze the UI; failures show real errors
+- Single-instance guard; staged app copies reclaimed on close;
+  thumbnail cache no longer grows forever
+- 20 audited bugs fixed across 5 commits, adversarially verified
 
 See CHANGELOG.md in the source repo for full per-commit detail.`)
 	description.Wrapping = fyne.TextWrapWord
