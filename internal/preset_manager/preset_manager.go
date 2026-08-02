@@ -322,12 +322,32 @@ func getNextRobloxCopyPath() string {
 			return path
 		}
 	}
-	// All slots occupied — remove Roblox2.app and reuse it.
-	path := filepath.Join(stagingDir, "Roblox2.app")
-	if err := os.RemoveAll(path); err != nil {
-		logger.LogError("getNextRobloxCopyPath: failed to clean stale slot %s: %v", path, err)
+
+	// All slots occupied — reclaim the first slot NOT backing a running
+	// process (same ps-based liveness check as CleanupTempRobloxCopies).
+	// Blindly removing Roblox2.app corrupted the binary of a still-running
+	// instance whenever that slot was live.
+	out, err := exec.Command("ps", "aux").Output()
+	if err != nil {
+		logger.LogError("getNextRobloxCopyPath: cannot check live instances (%v) — refusing to reclaim a slot", err)
+		return ""
 	}
-	return path
+	psOutput := string(out)
+
+	for i := 2; i <= 99; i++ {
+		path := filepath.Join(stagingDir, fmt.Sprintf("Roblox%d.app", i))
+		if strings.Contains(psOutput, path) {
+			continue // still in use by a running instance
+		}
+		if err := os.RemoveAll(path); err != nil {
+			logger.LogError("getNextRobloxCopyPath: failed to reclaim slot %s: %v", path, err)
+			continue
+		}
+		return path
+	}
+
+	logger.LogError("getNextRobloxCopyPath: all slots are backing running instances — no slot available")
+	return ""
 }
 
 // copyRobloxApp copies Roblox.app to a temporary location for multi-instance
