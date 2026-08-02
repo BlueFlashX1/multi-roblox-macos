@@ -372,6 +372,17 @@ func copyRobloxApp(destPath string) error {
 	return nil
 }
 
+// WithStagingLock runs fn while holding stagingMu. Exported for
+// cookie_manager.CleanupTempRobloxCopies, which sweeps the same staging
+// directory from close-button goroutines — without the shared lock it could
+// RemoveAll a slot that stageRobloxCopy is mid-copy into (the fresh copy's
+// process isn't in ps yet, so the liveness check alone can't protect it).
+func WithStagingLock(fn func()) {
+	stagingMu.Lock()
+	defer stagingMu.Unlock()
+	fn()
+}
+
 // stageRobloxCopy picks a free staging slot and copies Roblox.app into it as
 // one atomic operation under stagingMu, closing the Stat-then-copy TOCTOU
 // window between concurrent launches.

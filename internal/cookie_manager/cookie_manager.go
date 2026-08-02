@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"insadem/multi_roblox_macos/internal/keychain"
 	"insadem/multi_roblox_macos/internal/logger"
+	"insadem/multi_roblox_macos/internal/preset_manager"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -532,42 +533,47 @@ func CleanupTempRobloxCopies() {
 		return
 	}
 
-	// Get list of currently running Roblox processes and their paths
-	cmd := exec.Command("ps", "aux")
-	output, err := cmd.Output()
-	if err != nil {
-		logger.LogError("Failed to get process list: %v", err)
-		return
-	}
-	psOutput := string(output)
+	// The whole sweep runs under the shared staging lock: a copy that
+	// stageRobloxCopy is mid-cp into has no RobloxPlayer process yet, so the
+	// ps liveness check alone would let us delete a slot being written.
+	preset_manager.WithStagingLock(func() {
+		// Get list of currently running Roblox processes and their paths
+		cmd := exec.Command("ps", "aux")
+		output, err := cmd.Output()
+		if err != nil {
+			logger.LogError("Failed to get process list: %v", err)
+			return
+		}
+		psOutput := string(output)
 
-	// Glob all Roblox*.app entries in the staging dir — catches any slot count.
-	matches, err := filepath.Glob(filepath.Join(stagingDir, "Roblox*.app"))
-	if err != nil {
-		logger.LogError("CleanupTempRobloxCopies glob failed: %v", err)
-		return
-	}
-
-	cleaned := 0
-	for _, path := range matches {
-		// Check if this copy is currently in use
-		if strings.Contains(psOutput, path) {
-			logger.LogDebug("Skipping %s - still in use", path)
-			continue
+		// Glob all Roblox*.app entries in the staging dir — catches any slot count.
+		matches, err := filepath.Glob(filepath.Join(stagingDir, "Roblox*.app"))
+		if err != nil {
+			logger.LogError("CleanupTempRobloxCopies glob failed: %v", err)
+			return
 		}
 
-		// Not in use, safe to remove
-		if err := os.RemoveAll(path); err != nil {
-			logger.LogError("Failed to remove %s: %v", path, err)
-		} else {
-			logger.LogDebug("Removed: %s", path)
-			cleaned++
-		}
-	}
+		cleaned := 0
+		for _, path := range matches {
+			// Check if this copy is currently in use
+			if strings.Contains(psOutput, path) {
+				logger.LogDebug("Skipping %s - still in use", path)
+				continue
+			}
 
-	if cleaned > 0 {
-		logger.LogInfo("Cleaned up %d temporary Roblox copies", cleaned)
-	}
+			// Not in use, safe to remove
+			if err := os.RemoveAll(path); err != nil {
+				logger.LogError("Failed to remove %s: %v", path, err)
+			} else {
+				logger.LogDebug("Removed: %s", path)
+				cleaned++
+			}
+		}
+
+		if cleaned > 0 {
+			logger.LogInfo("Cleaned up %d temporary Roblox copies", cleaned)
+		}
+	})
 }
 
 // AutoRefreshCookieResult contains info about a cookie refresh attempt
